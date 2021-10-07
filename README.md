@@ -6,6 +6,17 @@ The Open Policy Agent (OPA) is an open source, general-purpose policy engine tha
 
 OPA is hosted by the [Cloud Native Computing Foundation](https://cncf.io) (CNCF) as a graduated project. If you are an organization that wants to help shape the evolution of technologies that are container-packaged, dynamically-scheduled and microservices-oriented, consider joining the CNCF. For details read the CNCF [announcement](https://www.cncf.io/announcements/2021/02/04/cloud-native-computing-foundation-announces-open-policy-agent-graduation/).
 
+## What is the this fork for?
+
+This allows us to maintain a stable version of OPA with any patches needed for development that have not yet been released as stable by OPA. We should never create patches that are internal only to Chime, but should instead submit them upstream. After they are merged feel free to apply them to our stable branch. 
+
+### How to create a stable branch
+
+``` bash
+git checkout -b upstream/{most-recent-release-branch-or-tag} {stable-version}-chime
+git cherry-pick {gitsha of commit with your patches}
+```
+
 ## Want to learn more about OPA?
 
 - See [openpolicyagent.org](https://www.openpolicyagent.org) to get started with documentation and tutorials.
