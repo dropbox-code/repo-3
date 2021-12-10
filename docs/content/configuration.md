@@ -387,6 +387,13 @@ keys:
     private_key: ${BUNDLE_SERVICE_SIGNING_KEY}
 ```
 
+{{< danger >}}
+OPA masks services authentication secrets which make use of the `credentials` field, in order to prevent the exposure of sensitive tokens.
+It is important to note that the [/v1/config API](../rest-api/#config-api) allows clients to read the runtime configuration of OPA. As such, any credentials used by
+custom configurations not utilizing the credentials field will be exposed to the caller.
+Consider requiring authentication in order to prevent unauthorized read access to OPA's runtime configuration.
+{{< /danger >}}
+
 #### AWS Signature
 
 OPA will authenticate with an [AWS4 HMAC](https://docs.aws.amazon.com/general/latest/gr/sigv4_signing.html) signature. Several methods of obtaining the
@@ -409,6 +416,19 @@ Please note that if you are using temporary IAM credentials (e.g. assumed IAM ro
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `services[_].credentials.s3_signing.environment_credentials` | `{}` | Yes | Enables AWS signing using environment variables to source the configuration and credentials |
+
+
+##### Using Named Profile Credentials
+If specifying `profile_credentials`, OPA will expect to find the `access key id`, `secret access key` and
+`session token` from the [named profiles](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-profiles.html)
+stored in the [credentials](https://docs.aws.amazon.com/sdkref/latest/guide/file-format.html) file on disk. On each
+request OPA will re-read the credentials from the file and use them for authentication.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `services[_].credentials.s3_signing.profile_credentials.path` | `string` | No | The path to the shared credentials file. If empty, OPA will look for the `AWS_SHARED_CREDENTIALS_FILE` env variable. If the variable is not set, the path defaults to the current user's home directory. `~/.aws/credentials` (Linux & Mac) or `%USERPROFILE%\.aws\credentials` (Windows) |
+| `services[_].credentials.s3_signing.profile_credentials.profile` | `string` | No | AWS Profile to extract credentials from the credentials file. If empty, OPA will look for the `AWS_PROFILE` env variable. If the variable is not set, the `default` profile will be used |
+| `services[_].credentials.s3_signing.metadata_credentials.aws_region` | `string` | No | The AWS region to use for the AWS signing service credential method. If unset, the `AWS_REGION` environment variable must be set |
 
 ##### Using EC2 Metadata Credentials
 If specifying `metadata_credentials`, OPA will use the AWS metadata services for [EC2](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/iam-roles-for-amazon-ec2.html)
@@ -512,6 +532,45 @@ bundles:
     resource: 'bundle.tar.gz?alt=media'
     persist: true
     polling:
+      min_delay_seconds: 60
+      max_delay_seconds: 120
+```
+
+#### Azure Managed Identities Token
+
+OPA will authenticate with an [Azure managed identities](https://docs.microsoft.com/en-us/azure/active-directory/managed-identities-azure-resources/overview) token. 
+The [token request](https://docs.microsoft.com/en-us/azure/active-directory/managed-identities-azure-resources/how-to-use-vm-token#get-a-token-using-http) 
+can be configured via the plugin to customize the base URL, API version, and resource. Specific managed identity IDs can be optionally provided as well.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `services[_].credentials.azure_managed_identity.endpoint` | `string` | No | Request endpoint. (default: `http://169.254.169.254/metadata/identity/oauth2/token`, the Azure Instance Metadata Service endpoint (recommended))|
+| `services[_].credentials.azure_managed_identity.api_version` | `string` | No | API version to use. (default: `2018-02-01`, the minimum version) |
+| `services[_].credentials.azure_managed_identity.resource` | `string` | No | App ID URI of the target resource. (default: `https://storage.azure.com/`) |
+| `services[_].credentials.azure_managed_identity.object_id` | `string` | No | Optional object ID of the managed identity you would like the token for. Required, if your VM has multiple user-assigned managed identites. |
+| `services[_].credentials.azure_managed_identity.client_id` | `string` | No | Optional client ID of the managed identity you would like the token for. Required, if your VM has multiple user-assigned managed identites. |
+| `services[_].credentials.azure_managed_identity.mi_res_id` | `string` | No | Optional Azure Resource ID of the managed identity you would like the token for. Required, if your VM has multiple user-assigned managed identites. |
+
+##### Example
+Use an [Azure storage account](https://docs.microsoft.com/en-us/azure/storage/common/storage-account-overview) as a bundle service backend.
+Note that the `x-ms-version` header must be specified for the storage account service, and a minimum version of `2017-11-09` must be provided as per [Azure documentation](https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-azure-active-directory#call-storage-operations-with-oauth-tokens).
+
+```yaml
+services: 
+  azure_storage_account: 
+    url: ${STORAGE_ACCOUNT_URL}
+    headers:
+      x-ms-version: 2017-11-09
+    response_header_timeout_seconds: 5
+    credentials: 
+      azure_managed_identity: {}
+
+bundles: 
+  authz: 
+    service: azure_storage_account
+    resource: bundles/http/example/authz.tar.gz
+    persist: true
+    polling: 
       min_delay_seconds: 60
       max_delay_seconds: 120
 ```

@@ -25,7 +25,7 @@ structured data as input.
 
 {{< figure src="opa-service.svg" width="65" caption="Policy Decoupling" >}}
 
-OPA generates policy decisions by evaluating the query input and against
+OPA generates policy decisions by evaluating the query input against
 policies and data. OPA and Rego are domain-agnostic so you can describe almost
 any kind of invariant in your policies. For example:
 
@@ -663,6 +663,15 @@ chmod 755 ./opa
 
 > You can also download and run OPA via Docker. The latest stable image tag is
 > `openpolicyagent/opa:{{< current_docker_version >}}`.
+
+#### Checksums
+Checksums for all binaries are available in the download path by appending `.sha256` to the binary filename. 
+Verify the macOS binary checksum:
+```shell
+curl -L -o opa_darwin_amd64 https://openpolicyagent.org/downloads/{{< current_version >}}/opa_darwin_amd64
+curl -L -o opa_darwin_amd64.sha256 https://openpolicyagent.org/downloads/{{< current_version >}}/opa_darwin_amd64.sha256
+shasum -c opa_darwin_amd64.sha256
+```
 
 ### 2. Try `opa eval`
 

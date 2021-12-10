@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gorilla/mux"
 	"github.com/open-policy-agent/opa/ast"
 	"github.com/open-policy-agent/opa/bundle"
 	"github.com/open-policy-agent/opa/config"
@@ -24,6 +25,7 @@ import (
 	"github.com/open-policy-agent/opa/resolver/wasm"
 	"github.com/open-policy-agent/opa/storage"
 	"github.com/open-policy-agent/opa/topdown/cache"
+	"github.com/open-policy-agent/opa/topdown/print"
 )
 
 // Factory defines the interface OPA uses to instantiate your plugin.
@@ -182,6 +184,9 @@ type Manager struct {
 	consoleLogger                logging.Logger
 	serverInitialized            chan struct{}
 	serverInitializedOnce        sync.Once
+	printHook                    print.Hook
+	enablePrintStatements        bool
+	router                       *mux.Router
 }
 
 type managerContextKey string
@@ -321,6 +326,24 @@ func ConsoleLogger(logger logging.Logger) func(*Manager) {
 	}
 }
 
+func EnablePrintStatements(yes bool) func(*Manager) {
+	return func(m *Manager) {
+		m.enablePrintStatements = yes
+	}
+}
+
+func PrintHook(h print.Hook) func(*Manager) {
+	return func(m *Manager) {
+		m.printHook = h
+	}
+}
+
+func WithRouter(r *mux.Router) func(*Manager) {
+	return func(m *Manager) {
+		m.router = r
+	}
+}
+
 // New creates a new Manager using config.
 func New(raw []byte, id string, store storage.Store, opts ...func(*Manager)) (*Manager, error) {
 
@@ -351,6 +374,10 @@ func New(raw []byte, id string, store storage.Store, opts ...func(*Manager)) (*M
 		serverInitialized:            make(chan struct{}),
 	}
 
+	for _, f := range opts {
+		f(m)
+	}
+
 	if m.logger == nil {
 		m.logger = logging.Get()
 	}
@@ -365,16 +392,13 @@ func New(raw []byte, id string, store storage.Store, opts ...func(*Manager)) (*M
 		Keys:       keys,
 		Logger:     m.logger,
 	}
+
 	services, err := cfg.ParseServicesConfig(serviceOpts)
 	if err != nil {
 		return nil, err
 	}
 
 	m.services = services
-
-	for _, f := range opts {
-		f(m)
-	}
 
 	return m, nil
 }
@@ -395,11 +419,12 @@ func (m *Manager) Init(ctx context.Context) error {
 	err := storage.Txn(ctx, m.Store, params, func(txn storage.Transaction) error {
 
 		result, err := initload.InsertAndCompile(ctx, initload.InsertAndCompileOptions{
-			Store:     m.Store,
-			Txn:       txn,
-			Files:     m.initFiles,
-			Bundles:   m.initBundles,
-			MaxErrors: m.maxErrors,
+			Store:                 m.Store,
+			Txn:                   txn,
+			Files:                 m.initFiles,
+			Bundles:               m.initBundles,
+			MaxErrors:             m.maxErrors,
+			EnablePrintStatements: m.enablePrintStatements,
 		})
 
 		if err != nil {
@@ -500,6 +525,13 @@ func (m *Manager) setCompiler(compiler *ast.Compiler) {
 	m.compilerMux.Lock()
 	defer m.compilerMux.Unlock()
 	m.compiler = compiler
+}
+
+// GetRouter returns the managers router if set
+func (m *Manager) GetRouter() *mux.Router {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+	return m.router
 }
 
 // RegisterCompilerTrigger registers for change notifications when the compiler
@@ -695,7 +727,7 @@ func (m *Manager) onCommit(ctx context.Context, txn storage.Transaction, event s
 	// compiler on the context but the server does not (nor would users
 	// implementing their own policy loading.)
 	if compiler == nil && event.PolicyChanged() {
-		compiler, _ = loadCompilerFromStore(ctx, m.Store, txn)
+		compiler, _ = loadCompilerFromStore(ctx, m.Store, txn, m.enablePrintStatements)
 	}
 
 	if compiler != nil {
@@ -727,7 +759,7 @@ func (m *Manager) onCommit(ctx context.Context, txn storage.Transaction, event s
 	}
 }
 
-func loadCompilerFromStore(ctx context.Context, store storage.Store, txn storage.Transaction) (*ast.Compiler, error) {
+func loadCompilerFromStore(ctx context.Context, store storage.Store, txn storage.Transaction, enablePrintStatements bool) (*ast.Compiler, error) {
 	policies, err := store.ListPolicies(ctx, txn)
 	if err != nil {
 		return nil, err
@@ -746,7 +778,7 @@ func loadCompilerFromStore(ctx context.Context, store storage.Store, txn storage
 		modules[policy] = module
 	}
 
-	compiler := ast.NewCompiler()
+	compiler := ast.NewCompiler().WithEnablePrintStatements(enablePrintStatements)
 	compiler.Compile(modules)
 	return compiler, nil
 }
@@ -820,6 +852,14 @@ func (m *Manager) Logger() logging.Logger {
 // ConsoleLogger gets the console logger for this plugin manager.
 func (m *Manager) ConsoleLogger() logging.Logger {
 	return m.consoleLogger
+}
+
+func (m *Manager) PrintHook() print.Hook {
+	return m.printHook
+}
+
+func (m *Manager) EnablePrintStatements() bool {
+	return m.enablePrintStatements
 }
 
 // ServerInitialized signals a channel indicating that the OPA

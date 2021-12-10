@@ -41,6 +41,7 @@ type evalCommandParams struct {
 	disableInlining     []string
 	shallowInlining     bool
 	disableIndexing     bool
+	disableEarlyExit    bool
 	strictBuiltinErrors bool
 	dataPaths           repeatedStringFlag
 	inputPath           string
@@ -266,6 +267,7 @@ access.
 	evalCommand.Flags().StringArrayVarP(&params.disableInlining, "disable-inlining", "", []string{}, "set paths of documents to exclude from inlining")
 	evalCommand.Flags().BoolVarP(&params.shallowInlining, "shallow-inlining", "", false, "disable inlining of rules that depend on unknowns")
 	evalCommand.Flags().BoolVar(&params.disableIndexing, "disable-indexing", false, "disable indexing optimizations")
+	evalCommand.Flags().BoolVar(&params.disableEarlyExit, "disable-early-exit", false, "disable 'early exit' optimizations")
 	evalCommand.Flags().BoolVarP(&params.strictBuiltinErrors, "strict-builtin-errors", "", false, "treat built-in function errors as fatal")
 	evalCommand.Flags().BoolVarP(&params.instrument, "instrument", "", false, "enable query instrumentation metrics (implies --metrics)")
 	evalCommand.Flags().BoolVarP(&params.profile, "profile", "", false, "perform expression profiling")
@@ -311,6 +313,10 @@ func eval(args []string, params evalCommandParams, w io.Writer) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+
+	ectx.regoArgs = append(ectx.regoArgs,
+		rego.EnablePrintStatements(true),
+		rego.PrintHook(topdown.NewPrintHook(os.Stderr)))
 
 	results := make([]pr.Output, ectx.params.count)
 	profiles := make([][]profiler.ExprStats, ectx.params.count)
@@ -468,7 +474,10 @@ func setupEval(args []string, params evalCommandParams) (*evalContext, error) {
 	}
 
 	regoArgs := []func(*rego.Rego){rego.Query(query), rego.Runtime(info)}
-	var evalArgs []rego.EvalOption
+	evalArgs := []rego.EvalOption{
+		rego.EvalRuleIndexing(!params.disableIndexing),
+		rego.EvalEarlyExit(!params.disableEarlyExit),
+	}
 
 	if len(params.imports.v) > 0 {
 		regoArgs = append(regoArgs, rego.Imports(params.imports.v))
@@ -530,10 +539,6 @@ func setupEval(args []string, params evalCommandParams) (*evalContext, error) {
 		if params.target.String() == compile.TargetWasm {
 			fmt.Fprintf(os.Stderr, "warning: explain mode \"%v\" is not supported with wasm target\n", params.explain.String())
 		}
-	}
-
-	if params.disableIndexing {
-		evalArgs = append(evalArgs, rego.EvalRuleIndexing(false))
 	}
 
 	var m metrics.Metrics
@@ -685,7 +690,7 @@ func (f *intFlag) String() string {
 }
 
 func (f *intFlag) Set(s string) error {
-	v, err := strconv.ParseInt(s, 0, 64)
+	v, err := strconv.ParseInt(s, 0, 32)
 	f.v = int(v)
 	f.isSet = true
 	return err
