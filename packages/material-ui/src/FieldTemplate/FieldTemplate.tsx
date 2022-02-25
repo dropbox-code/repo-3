@@ -51,8 +51,6 @@ const FieldTemplate = ({
     return null;
   }
 
-
-
   return (
     <WrapIfAdditional
       classNames={classNames}
