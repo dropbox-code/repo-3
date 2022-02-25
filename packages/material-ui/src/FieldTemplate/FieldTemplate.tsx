@@ -51,8 +51,6 @@ const FieldTemplate = ({
     return null;
   }
 
-  console.log(uiSchema);
-
   return (
     <WrapIfAdditional
       classNames={classNames}
