@@ -457,7 +457,9 @@ class Form extends Component {
     // Prevent Enter press from activating submit action
     if (event.keyCode === 13) {
       const target = event.target;
-      event.preventDefault();
+      if (target.type !== "textarea") {
+        event.preventDefault();
+      }
       target.click();
     }
   };
