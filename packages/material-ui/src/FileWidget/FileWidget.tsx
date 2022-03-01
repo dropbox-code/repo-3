@@ -9,6 +9,18 @@ import IconButton from "@material-ui/core/IconButton";
 import HighlightOffIcon from "@material-ui/icons/HighlightOff";
 import Button from "@material-ui/core/Button";
 import { useIntl } from 'react-intl';
+import { makeStyles } from '@material-ui/core/styles';
+
+const useStyles = makeStyles({
+  inputLabel: {
+    position:"absolute",
+    left:"-10000px",
+    top:"auto",
+    width:"1px",
+    height:"1px",
+    overflow:"hidden"
+  },
+});
 
 interface FileInfo {
   name: string;
@@ -105,6 +117,7 @@ const FileWidget = ({
   const [state, setState] = useState<FileInfo[]>();
   const inputRef = useRef();
   const intl = useIntl();
+  const classes = useStyles();
 
   useEffect(() => {
     const values = Array.isArray(value) ? value : [value];
@@ -178,6 +191,7 @@ const FileWidget = ({
 
   return (
     <>
+      <label htmlFor={`file-input-${id}`} className={classes.inputLabel}>{ariaLabel}</label>
       <input
         ref={inputRef.current}
         id={`file-input-${id}`}
@@ -186,6 +200,7 @@ const FileWidget = ({
         onChange={handleChange}
         autoFocus={autofocus}
         multiple={multiple}
+        aria-hidden={true}
         accept={options.accept as string}
         style={{display: 'none'}}
       />

@@ -111,10 +111,12 @@ const SelectWidget = ({
       onFocus={_onFocus}
       InputProps={{classes: {formControl: classes.inputFormControl }}}
       InputLabelProps={{
+        htmlFor: id,
         shrink: false,
         className: classes.inputLabelRoot
       }}
       SelectProps={{
+        labelId: `${id}-label`,
         multiple: typeof multiple === "undefined" ? false : multiple,
         "aria-describedby": utils.ariaDescribedBy(id),
       }}>
