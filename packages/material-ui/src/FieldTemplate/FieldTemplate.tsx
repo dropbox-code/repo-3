@@ -29,12 +29,8 @@ const getLabel = (uiSchema: any, defaultLabel: string) => {
   return defaultLabel;
 }
 
-const indentation = (element: {filter?: {show?: any}}) => {
-  if (element.filter && element.filter!.show) {
-    return true;
-  } else {
-    return false;
-  }
+const indentation = (element: any) => {
+  return element.indent;
 }
 
 const FieldTemplate = ({
@@ -61,7 +57,7 @@ const FieldTemplate = ({
   }
 
   return (
-    <Box pl={uiSchema['ui:options'] && indentation(uiSchema['ui:options']!.element as {filter?: {show?: any}}) ? 3 : 0}>
+    <Box pl={uiSchema['ui:options'] && indentation(uiSchema['ui:options']!.element) ? 3 : 0}>
       <WrapIfAdditional
         classNames={classNames}
         disabled={disabled}
