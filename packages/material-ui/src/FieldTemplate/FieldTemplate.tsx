@@ -30,7 +30,6 @@ const getLabel = (uiSchema: any, defaultLabel: string) => {
 }
 
 const indentation = (element: {filter?: {show?: any}}) => {
-  console.log(element.filter);
   if (element.filter && element.filter!.show) {
     return true;
   } else {
