@@ -19,14 +19,22 @@ const {
   getDefaultRegistry,
 } = utils;
 
-const ArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
-  const { schema, registry = getDefaultRegistry() } = props;
+const indentation = (element: any) => {
+  return element.indent;
+}
 
-  if (isMultiSelect(schema, registry.rootSchema)) {
-    return <DefaultFixedArrayFieldTemplate {...props} />;
-  } else {
-    return <DefaultNormalArrayFieldTemplate {...props} />;
-  }
+const ArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
+  const { schema, registry = getDefaultRegistry(), uiSchema } = props;
+
+  return(
+    <Box pl={uiSchema.items && uiSchema.items!['ui:options'] && indentation(uiSchema.items!['ui:options']!.element) ? 3 : 0}>
+      {
+        isMultiSelect(schema, registry.rootSchema)
+          ? <DefaultFixedArrayFieldTemplate {...props} />
+          : <DefaultNormalArrayFieldTemplate {...props} />
+      }
+    </Box>
+  );
 };
 
 type ArrayFieldTitleProps = {
