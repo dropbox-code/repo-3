@@ -7,6 +7,14 @@ import { WidgetProps } from "@visma/rjsf-core";
 
 const { rangeSpec } = utils;
 
+const getScaleProps = (options: {element: {widget?: string, scaleMarks?: [{value: number, label: string}]}}) => {
+  const scaleMarks =
+    options.element.scaleMarks && options.element.scaleMarks![0] === undefined
+      ? undefined
+      : options.element.scaleMarks;
+  return { widget: options.element.widget, scaleMarks: scaleMarks};
+}
+
 const calculateMultiplier = (min: number, max: number, step: number) => {
   let multiplier = 1;
   const range = max-min;
@@ -55,6 +63,14 @@ const generateWithMiddleMarks = (min: number, max: number, step: number) => {
   return middleMarks;
 }
 
+const generateEndpointMarks = (min?: number, max?: number) => {
+  if (min === undefined || max === undefined ) {
+    return undefined;
+  } else {
+    return [{value: min!, label: min!.toString()}, {value: max!, label: max!.toString()}];
+  }
+}
+
 const generateMarks = (min?: number, max?: number, step?: number) => {
   if (min === undefined || max === undefined ) {
     return [];
@@ -66,7 +82,7 @@ const generateMarks = (min?: number, max?: number, step?: number) => {
     return generateWithMiddleMarks(min!, max!, (step ? step : 1)*multiplier);
   }
 
-  return [{value: min!, label: min!.toString()}, {value: max!, label: max!.toString()}];
+  return generateEndpointMarks(min, max);
 }
 
 const RangeWidget = ({
@@ -81,7 +97,10 @@ const RangeWidget = ({
   label,
   id,
 }: WidgetProps) => {
-  let sliderProps = { value, label, id, ...rangeSpec(schema) };
+  const sliderProps = { value, label, id, ...rangeSpec(schema) };
+  const scaleProps = options.element
+    ? getScaleProps(options as { element: {widget?: string, scaleMarks?: [{value: number, label: string}]}})
+    : { widget: 'noScale', scaleMarks: undefined };
 
   const _onChange = ({}, value: any) =>
     onChange(value === "" ? options.emptyValue : value);
@@ -91,7 +110,11 @@ const RangeWidget = ({
     target: { value },
   }: React.FocusEvent<HTMLInputElement>) => onFocus(id, value);
 
-  const marks = generateMarks(sliderProps.min, sliderProps.max, sliderProps.step);
+  const marks = scaleProps.widget === 'customScale'
+    ? scaleProps.scaleMarks
+    : scaleProps.widget === 'automaticScale'
+      ? generateMarks(sliderProps.min, sliderProps.max, sliderProps.step)
+      : generateEndpointMarks(sliderProps.min, sliderProps.max);
 
   let ariaLabel = label;
 
