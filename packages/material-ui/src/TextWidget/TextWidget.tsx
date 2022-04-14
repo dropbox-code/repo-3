@@ -50,13 +50,23 @@ const TextWidget = ({
   registry, // pull out the registry so it doesn't end up in the textFieldProps
   ...textFieldProps
 }: TextWidgetProps) => {
+  const bannedCharacters = options && options.element
+    ? (options.element as {bannedCharacters: string}).bannedCharacters
+    : undefined;
+
   const _onChange = ({
     target: { value },
   }: React.ChangeEvent<HTMLInputElement>) => {
     const rawValue = (value === "" ? options.emptyValue : value);
-    onChange(rawValue ?
-      schema.maxLength ? String(rawValue).substring(0, Number(schema.maxLength)) : rawValue
-        : "")
+    let cleanedValue = rawValue;
+    if (typeof cleanedValue === 'string' && bannedCharacters && bannedCharacters.length > 0) {
+      for (const character of bannedCharacters) {
+        cleanedValue = cleanedValue.split(character).join('');
+      }
+    }
+    onChange(cleanedValue ?
+      schema.maxLength ? String(cleanedValue).substring(0, Number(schema.maxLength)) : cleanedValue
+      : "");
   };
   const _onBlur = ({ target: { value } }: React.FocusEvent<HTMLInputElement>) =>
     onBlur(id, value);
