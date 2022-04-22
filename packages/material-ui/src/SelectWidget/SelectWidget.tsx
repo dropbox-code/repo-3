@@ -109,9 +109,12 @@ const SelectWidget = ({
       onChange={_onChange}
       onBlur={_onBlur}
       onFocus={_onFocus}
-      InputProps={{classes: {formControl: classes.inputFormControl }}}
+      InputProps={{
+        id: `${id}-input`,
+        classes: {formControl: classes.inputFormControl }
+      }}
       InputLabelProps={{
-        htmlFor: id,
+        htmlFor: `${id}-input`,
         shrink: false,
         className: classes.inputLabelRoot
       }}
