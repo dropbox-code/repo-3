@@ -57,7 +57,6 @@ const FieldTemplate = ({
   }
 
   const headerNumber = id.split('_').length + 1;
-  console.log(label + ' | ' + id);
 
   return (
     <Box pl={uiSchema['ui:options'] && indentation(uiSchema['ui:options']!.element) ? 3 : 0}>
