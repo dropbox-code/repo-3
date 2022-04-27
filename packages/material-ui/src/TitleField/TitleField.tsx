@@ -9,7 +9,7 @@ import Typography from '@material-ui/core/Typography';
 const TitleField = ({ title }: FieldProps) => (
   <>
     <Box mb={1} mt={1}>
-      <Typography variant="h5">{title}</Typography>
+      <Typography component="h2" variant="h5">{title}</Typography>
       <Divider />
     </Box>
   </>

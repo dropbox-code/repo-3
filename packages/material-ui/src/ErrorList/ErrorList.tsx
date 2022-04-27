@@ -18,7 +18,7 @@ const ErrorList = ({ errors }: ErrorListProps) => {
   return (
     <Paper elevation={2}>
       <Box mb={2} p={2}>
-        <Typography variant="h6">
+        <Typography component="h4" variant="h6">
           {intl.formatMessage({defaultMessage: 'Errors'})}
         </Typography>
         <List dense={true}>

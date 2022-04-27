@@ -57,7 +57,7 @@ const ArrayFieldTitle = ({
   // return <TitleField id={id} title={title} required={required} />;
   return (
     <Box id={id} mb={1} mt={1}>
-      <Typography variant="subtitle1">{required ? title + ' *' : title}</Typography>
+      <Typography component="h4" variant="subtitle1">{required ? title + ' *' : title}</Typography>
       <Divider />
     </Box>
   );
