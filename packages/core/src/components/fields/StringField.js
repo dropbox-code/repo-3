@@ -16,7 +16,6 @@ function StringField(props) {
     name,
     uiSchema,
     idSchema,
-    formData,
     required,
     disabled,
     readonly,
@@ -27,12 +26,16 @@ function StringField(props) {
     registry = getDefaultRegistry(),
     rawErrors,
   } = props;
+  let formData = props.formData;
   const { title, format } = schema;
   const { widgets, formContext } = registry;
   const enumOptions = isSelect(schema) && optionsList(schema);
   let defaultWidget = enumOptions ? "select" : "text";
   if (format && hasWidget(schema, format, widgets)) {
     defaultWidget = format;
+  }
+  if (props.schema.format === "date" && props.formData instanceof Array) {
+    !props.index ? (formData = props.formData[0]) : (formData = props.formData);
   }
   const { widget = defaultWidget, placeholder = "", ...options } = getUiOptions(
     uiSchema
