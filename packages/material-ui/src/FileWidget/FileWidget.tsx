@@ -120,12 +120,16 @@ const FileWidget = ({
   const classes = useStyles();
 
   useEffect(() => {
-    const values = Array.isArray(value) ? value : [value];
-    const initialFilesInfo: FileInfo[] = extractFileInfo(values);
-    if (initialFilesInfo.length > 0) {
-      setState(initialFilesInfo);
+    if (value === null) {
+      setState(undefined);
     } else {
-      setState([]);
+      const values = Array.isArray(value) ? value : [value];
+      const initialFilesInfo: FileInfo[] = extractFileInfo(values);
+      if (initialFilesInfo.length > 0) {
+        setState(initialFilesInfo);
+      } else {
+        setState(undefined);
+      }
     }
   }, [value]);
 
@@ -147,7 +151,7 @@ const FileWidget = ({
         const newValues = value.splice(index, 1);
         onChange(newValues);
       } else {
-        onChange([undefined]);
+        onChange(null);
       }
     }
 
