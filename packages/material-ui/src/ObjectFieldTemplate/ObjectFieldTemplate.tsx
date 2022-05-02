@@ -40,7 +40,7 @@ const ObjectFieldTemplate = ({
     <>
       {(uiSchema['ui:title'] || title) && (
         <Box id={`${idSchema.$id}-title`} mb={1} mt={1}>
-          <Typography variant="subtitle1" style={{fontSize: 18}}>{title}</Typography>
+          <Typography component={idSchema.$id === 'root' ? 'h2' : 'h3'} variant="subtitle1" style={{fontSize: 18}}>{title}</Typography>
           <Divider />
         </Box>
       )}

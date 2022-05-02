@@ -53,11 +53,19 @@ const ArrayFieldTitle = ({
     return null;
   }
 
+  const headerNumber = idSchema.$id.split('_').length + 1;
   const id = `${idSchema.$id}__title`;
   // return <TitleField id={id} title={title} required={required} />;
   return (
     <Box id={id} mb={1} mt={1}>
-      <Typography variant="subtitle1">{required ? title + ' *' : title}</Typography>
+      <Typography
+        component={
+          headerNumber === 2 ? "h2"
+          : headerNumber === 3 ? "h3"
+            : headerNumber === 4 ? "h4"
+              : headerNumber === 5 ? "h5" : "h6"
+        }
+        variant="subtitle1">{required ? title + ' *' : title}</Typography>
       <Divider />
     </Box>
   );
