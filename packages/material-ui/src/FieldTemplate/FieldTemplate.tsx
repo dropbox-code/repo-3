@@ -74,7 +74,7 @@ const FieldTemplate = ({
           fullWidth={true}
           error={rawErrors.length ? true : false}
           required={required}>
-          {showTitle(schema, uiSchema) && getLabel(uiSchema, label) ?
+          {showTitle(schema, uiSchema) && getLabel(uiSchema, label) && getLabel(uiSchema, label).trim() !== '' ?
             <Typography
               aria-label={required ? intl.formatMessage({defaultMessage: 'Required field'}) : undefined}
               component={ headerNumber === 2 ? "h2"
