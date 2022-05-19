@@ -35,7 +35,9 @@ function StringField(props) {
     defaultWidget = format;
   }
   if (props.schema.format === "date" && props.formData instanceof Array) {
-    !props.index ? (formData = props.formData[0]) : (formData = props.formData);
+    props.index >= 0
+      ? (formData = props.formData[0])
+      : (formData = props.formData);
   }
   const { widget = defaultWidget, placeholder = "", ...options } = getUiOptions(
     uiSchema
