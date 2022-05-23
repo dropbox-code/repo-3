@@ -8,6 +8,7 @@ import { makeStyles } from "@material-ui/core/styles";
 import DescriptionIcon from "@material-ui/icons/Description";
 import HighlightOffIcon from "@material-ui/icons/HighlightOff";
 import { WidgetProps } from "@visma/rjsf-core";
+import prettyBytes from "pretty-bytes";
 import React, { useEffect, useRef, useState } from "react";
 import { useIntl } from "react-intl";
 
@@ -118,6 +119,7 @@ const FileWidget = ({
   const inputRef = useRef();
   const intl = useIntl();
   const classes = useStyles();
+  const { locale } = intl;
 
   useEffect(() => {
     if (value === null) {
@@ -179,7 +181,7 @@ const FileWidget = ({
               </ListItemIcon>
               <ListItemText
                 primary={name}
-                secondary={`${type}, ${size} bytes`}
+                secondary={`${type}, ${prettyBytes(size, { locale })}`}
               />
               <RemoveButton index={key} />
             </ListItem>

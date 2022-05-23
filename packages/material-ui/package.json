@@ -13,6 +13,9 @@
     "build": "rimraf dist && tsdx build",
     "test": "tsdx test"
   },
+  "dependencies": {
+    "pretty-bytes": "^6.0.0"
+  },
   "peerDependencies": {
     "@material-ui/core": "^4.2.0",
     "@material-ui/icons": "^4.2.1",
