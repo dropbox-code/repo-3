@@ -1,24 +1,24 @@
-import React, { useState, useRef, useEffect } from "react";
-import { WidgetProps } from "@visma/rjsf-core";
-import List from "@material-ui/core/List";
-import ListItemText from "@material-ui/core/ListItemText";
-import ListItemIcon from "@material-ui/core/ListItemIcon";
-import ListItem from "@material-ui/core/ListItem";
-import DescriptionIcon from "@material-ui/icons/Description";
-import IconButton from "@material-ui/core/IconButton";
-import HighlightOffIcon from "@material-ui/icons/HighlightOff";
 import Button from "@material-ui/core/Button";
-import { useIntl } from 'react-intl';
-import { makeStyles } from '@material-ui/core/styles';
+import IconButton from "@material-ui/core/IconButton";
+import List from "@material-ui/core/List";
+import ListItem from "@material-ui/core/ListItem";
+import ListItemIcon from "@material-ui/core/ListItemIcon";
+import ListItemText from "@material-ui/core/ListItemText";
+import { makeStyles } from "@material-ui/core/styles";
+import DescriptionIcon from "@material-ui/icons/Description";
+import HighlightOffIcon from "@material-ui/icons/HighlightOff";
+import { WidgetProps } from "@visma/rjsf-core";
+import React, { useEffect, useRef, useState } from "react";
+import { useIntl } from "react-intl";
 
 const useStyles = makeStyles({
   inputLabel: {
-    position:"absolute",
-    left:"-10000px",
-    top:"auto",
-    width:"1px",
-    height:"1px",
-    overflow:"hidden"
+    position: "absolute",
+    left: "-10000px",
+    top: "auto",
+    width: "1px",
+    height: "1px",
+    overflow: "hidden",
   },
 });
 
@@ -104,16 +104,16 @@ function extractFileInfo(dataURLs: any[]) {
 }
 
 const FileWidget = ({
-                      id,
-                      options,
-                      value,
-                      disabled,
-                      readonly,
-                      multiple,
-                      autofocus,
-                      onChange,
-                      label
-                    }: WidgetProps) => {
+  id,
+  options,
+  value,
+  disabled,
+  readonly,
+  multiple,
+  autofocus,
+  onChange,
+  label,
+}: WidgetProps) => {
   const [state, setState] = useState<FileInfo[]>();
   const inputRef = useRef();
   const intl = useIntl();
@@ -145,7 +145,7 @@ const FileWidget = ({
     });
   };
 
-  const RemoveButton = ({index}: any) => {
+  const RemoveButton = ({ index }: any) => {
     const onRemoveClick = () => {
       if (multiple) {
         const newValues = value.splice(index, 1);
@@ -153,16 +153,16 @@ const FileWidget = ({
       } else {
         onChange(null);
       }
-    }
+    };
 
     return (
       <IconButton
-        aria-label={intl.formatMessage({defaultMessage: "Remove file"})}
+        aria-label={intl.formatMessage({ defaultMessage: "Remove file" })}
         onClick={onRemoveClick}>
         <HighlightOffIcon />
       </IconButton>
     );
-  }
+  };
 
   const FilesInfo = ({ filesInfo }: Props) => {
     if (!filesInfo || filesInfo.length === 0) {
@@ -177,7 +177,10 @@ const FileWidget = ({
               <ListItemIcon>
                 <DescriptionIcon />
               </ListItemIcon>
-              <ListItemText primary={name} secondary={`${type}, ${size} bytes`} />
+              <ListItemText
+                primary={name}
+                secondary={`${type}, ${size} bytes`}
+              />
               <RemoveButton index={key} />
             </ListItem>
           );
@@ -189,13 +192,19 @@ const FileWidget = ({
   let ariaLabel = label;
 
   if (!ariaLabel) {
-    const element = options!.element as {label: string, title: string, useLabel: boolean};
+    const element = options!.element as {
+      label: string;
+      title: string;
+      useLabel: boolean;
+    };
     ariaLabel = element.useLabel ? element.label : element.title;
   }
 
   return (
     <>
-      <label htmlFor={`file-input-${id}`} className={classes.inputLabel}>{ariaLabel}</label>
+      <label htmlFor={`file-input-${id}`} className={classes.inputLabel}>
+        {ariaLabel}
+      </label>
       <input
         ref={inputRef.current}
         id={`file-input-${id}`}
@@ -206,16 +215,18 @@ const FileWidget = ({
         multiple={multiple}
         aria-hidden={true}
         accept={options.accept as string}
-        style={{display: 'none'}}
+        style={{ display: "none" }}
       />
       <Button
-        aria-label={ ariaLabel &&
-          `${ariaLabel}: ${intl.formatMessage({defaultMessage: 'Choose file'})}`
+        aria-label={
+          ariaLabel &&
+          `${ariaLabel}: ${intl.formatMessage({
+            defaultMessage: "Choose file",
+          })}`
         }
         variant="outlined"
-        onClick={() => document.getElementById(`file-input-${id}`)!.click()}
-      >
-        { intl.formatMessage({defaultMessage: 'Choose file'}) }
+        onClick={() => document.getElementById(`file-input-${id}`)!.click()}>
+        {intl.formatMessage({ defaultMessage: "Choose file" })}
       </Button>
       <FilesInfo filesInfo={state} />
     </>
