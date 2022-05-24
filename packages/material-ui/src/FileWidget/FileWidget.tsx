@@ -114,6 +114,7 @@ const FileWidget = ({
   autofocus,
   onChange,
   label,
+  uiSchema,
 }: WidgetProps) => {
   const [state, setState] = useState<FileInfo[]>();
   const inputRef = useRef();
@@ -137,6 +138,52 @@ const FileWidget = ({
 
   const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     processFiles(event.target.files).then((filesInfo: any) => {
+      const maxFileSizeMb = (uiSchema["ui:options"]?.element as any)
+        ?.maxFileSizeMb;
+
+      if (maxFileSizeMb) {
+        const maxFileSize = maxFileSizeMb * Math.pow(1000, 2);
+        filesInfo = filesInfo.filter((fileInfo: any) => {
+          const isAccepted = fileInfo.size <= maxFileSize;
+          if (!isAccepted) {
+            alert(
+              intl.formatMessage(
+                {
+                  defaultMessage:
+                    'File "{name}" is not accepted. Maximum file size is {size}.',
+                },
+                {
+                  name: fileInfo.name,
+                  size: prettyBytes(maxFileSize, { locale }),
+                }
+              )
+            );
+          }
+          return isAccepted;
+        });
+      }
+
+      if (options.accept) {
+        const accept = (options.accept as string).split(",");
+        filesInfo = filesInfo.filter((fileInfo: any) => {
+          const isAccepted = accept.some(accept =>
+            fileInfo.name.endsWith(accept)
+          );
+          if (!isAccepted) {
+            alert(
+              intl.formatMessage(
+                {
+                  defaultMessage:
+                    'File "{name}" is not accepted. Accepted file extensions are: {accept}.',
+                },
+                { name: fileInfo.name, accept: options.accept }
+              )
+            );
+          }
+          return isAccepted;
+        });
+      }
+
       setState(filesInfo);
       const values = filesInfo.map((fileInfo: any) => fileInfo.dataURL);
       if (multiple) {

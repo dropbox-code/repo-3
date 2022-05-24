@@ -8,6 +8,9 @@
   "H/r5m6": {
     "defaultMessage": "Siirrä alas"
   },
+  "Q7OsfP": {
+    "defaultMessage": "Tiedosto \"{name}\" ei ole sallittu. Sallitut tiedostopäätteet ovat: {accept}."
+  },
   "a5msuh": {
     "defaultMessage": "Kyllä"
   },
@@ -19,6 +22,9 @@
   },
   "oUWADl": {
     "defaultMessage": "Ei"
+  },
+  "YZMoKC": {
+    "defaultMessage": "Tiedosto \"{name}\" ei ole sallittu. Tiedoston enimmäiskoko on {size}."
   },
   "wSZR47": {
     "defaultMessage": "Lähetä"
