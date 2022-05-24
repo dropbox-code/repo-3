@@ -5,30 +5,23 @@ import FormControlLabel from "@material-ui/core/FormControlLabel";
 import { FormHelperText } from "@material-ui/core";
 
 import { WidgetProps } from "@visma/rjsf-core";
-import { utils } from "@visma/rjsf-core";
 import FormControl from '@material-ui/core/FormControl';
 
-const { schemaRequiresTrueValue } = utils;
 
 const CheckboxWidget = (props: WidgetProps) => {
   const {
-    schema,
     id,
     value,
     disabled,
     readonly,
-    label,
     autofocus,
     onChange,
     onBlur,
     onFocus,
-    options
+    options,
+    required,
   } = props;
-
-  // Because an unchecked checkbox will cause html5 validation to fail, only add
-  // the "required" attribute if the field value must be "true", due to the
-  // "const" or "enum" keywords
-  const required = schemaRequiresTrueValue(schema);
+  let label = required ? props.label + " *" : props.label;
 
   const _onChange = ({}, checked: boolean) => onChange(checked);
   const _onBlur = ({
