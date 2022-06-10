@@ -283,7 +283,12 @@ function SchemaFieldRender(props) {
 
   const displayLabel = getDisplayLabel(schema, uiSchema, rootSchema);
 
-  const { __errors, ...fieldErrorSchema } = errorSchema;
+  let { __errors, ...fieldErrorSchema } = errorSchema;
+  if (uiSchema["ui:options"]?.element?.type === "dateRange") {
+    __errors = [];
+    __errors.push(errorSchema?.start?.__errors[0]);
+    __errors.push(errorSchema?.end?.__errors[0]);
+  }
 
   // See #439: uiSchema: Don't pass consumed class names to child components
   const field = (
@@ -315,7 +320,8 @@ function SchemaFieldRender(props) {
     uiSchema["ui:description"] ||
     props.schema.description ||
     schema.description;
-  const errors = __errors;
+  const errors =
+    uiSchema["ui:options"]?.element?.type === "dateRange" ? [] : __errors;
   const help = uiSchema["ui:help"];
   const hidden = uiSchema["ui:widget"] === "hidden";
   const classNames = [
