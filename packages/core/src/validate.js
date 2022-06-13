@@ -213,6 +213,21 @@ export default function validateFormData(
     formerCustomFormats = customFormats;
   }
 
+  for (const key in schema.properties) {
+    if (
+      !schema.required.includes(key) &&
+      schema.properties[key].type === "array" &&
+      schema.properties[key].items.type !== "object" &&
+      !schema.properties[key].items.pattern &&
+      !schema.properties[key].items.minimum &&
+      !schema.properties[key].items.maximum &&
+      !schema.properties[key].items.maxLength
+    ) {
+      // do not validate these fields
+      delete formData[key];
+    }
+  }
+
   let validationError = null;
   try {
     ajv.validate(schema, formData);
