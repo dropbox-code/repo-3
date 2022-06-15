@@ -213,31 +213,53 @@ export default function validateFormData(
     formerCustomFormats = customFormats;
   }
 
-  const removeDataFromValidation = (elements, required, formData) => {
+  const removeDataFromValidation = (
+    elements,
+    required,
+    formData,
+    objectList
+  ) => {
     for (const key in elements) {
       const element = elements[key];
-      if (element.type === "object") {
+      if (element?.type === "object") {
         removeDataFromValidation(
           element.properties,
           element.required,
-          formData[key]
+          formData[key],
+          false
         );
       } else if (
-        !required.includes(key) &&
-        element.type === "array" &&
-        element.items.type !== "object" &&
-        !element.items.pattern &&
-        !element.items.minimum &&
-        !element.items.maximum &&
-        !element.items.maxLength
+        element?.type === "array" &&
+        element?.items.type === "object"
+      ) {
+        removeDataFromValidation(
+          element.items.properties,
+          element.items.required,
+          formData[key],
+          true
+        );
+      } else if (
+        !required?.includes(key) &&
+        element?.type === "array" &&
+        element?.items.type !== "object" &&
+        !element?.items.pattern &&
+        !element?.items.minimum &&
+        !element?.items.maximum &&
+        !element?.items.maxLength
       ) {
         // do not validate these fields
-        delete formData[key];
+        if (objectList) {
+          for (const formDatum of formData) {
+            delete formDatum[key];
+          }
+        } else {
+          delete formData[key];
+        }
       }
     }
   };
 
-  removeDataFromValidation(schema.properties, schema.required, formData);
+  removeDataFromValidation(schema.properties, schema.required, formData, false);
 
   let validationError = null;
   try {
