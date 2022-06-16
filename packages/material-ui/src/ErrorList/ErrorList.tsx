@@ -16,7 +16,7 @@ const ErrorList = ({ errors }: ErrorListProps) => {
   const intl = useIntl();
 
   return (
-    <Paper elevation={2}>
+    <Paper role="alert" elevation={2}>
       <Box mb={2} p={2}>
         <Typography component="h4" variant="h6">
           {intl.formatMessage({defaultMessage: 'Errors'})}
