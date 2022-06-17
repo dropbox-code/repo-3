@@ -213,20 +213,53 @@ export default function validateFormData(
     formerCustomFormats = customFormats;
   }
 
-  for (const key in schema.properties) {
-    if (
-      !schema.required.includes(key) &&
-      schema.properties[key].type === "array" &&
-      schema.properties[key].items.type !== "object" &&
-      !schema.properties[key].items.pattern &&
-      !schema.properties[key].items.minimum &&
-      !schema.properties[key].items.maximum &&
-      !schema.properties[key].items.maxLength
-    ) {
-      // do not validate these fields
-      delete formData[key];
+  const removeDataFromValidation = (
+    elements,
+    required,
+    formData,
+    objectList
+  ) => {
+    for (const key in elements) {
+      const element = elements[key];
+      if (element?.type === "object") {
+        removeDataFromValidation(
+          element.properties,
+          element.required,
+          formData[key],
+          false
+        );
+      } else if (
+        element?.type === "array" &&
+        element?.items.type === "object"
+      ) {
+        removeDataFromValidation(
+          element.items.properties,
+          element.items.required,
+          formData[key],
+          true
+        );
+      } else if (
+        !required?.includes(key) &&
+        element?.type === "array" &&
+        element?.items.type !== "object" &&
+        !element?.items.pattern &&
+        !element?.items.minimum &&
+        !element?.items.maximum &&
+        !element?.items.maxLength
+      ) {
+        // do not validate these fields
+        if (objectList) {
+          for (const formDatum of formData) {
+            delete formDatum[key];
+          }
+        } else {
+          delete formData[key];
+        }
+      }
     }
-  }
+  };
+
+  removeDataFromValidation(schema.properties, schema.required, formData, false);
 
   let validationError = null;
   try {
