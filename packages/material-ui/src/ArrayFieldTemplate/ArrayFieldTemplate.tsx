@@ -61,9 +61,7 @@ const ArrayFieldTitle = ({
       <Typography
         component={
           headerNumber === 2 ? "h2"
-          : headerNumber === 3 ? "h3"
-            : headerNumber === 4 ? "h4"
-              : headerNumber === 5 ? "h5" : "h6"
+          : headerNumber === 3 ? "h3" : "h4"
         }
         variant="subtitle1">{required ? title + ' *' : title}</Typography>
       <Divider />
