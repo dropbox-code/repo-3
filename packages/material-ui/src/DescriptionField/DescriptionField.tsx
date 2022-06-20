@@ -16,7 +16,7 @@ const DescriptionField = ({ description }: FieldProps) => {
     const classes = useStyles();
 
     return (
-      <Typography variant="subtitle2" className={classes.root}>
+      <Typography component="span" variant="subtitle2" className={classes.root}>
         {description}
       </Typography>
     );
