@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useIntl } from 'react-intl';
 
 import Box from '@material-ui/core/Box';
@@ -14,12 +14,23 @@ import { ErrorListProps } from '@visma/rjsf-core';
 
 const ErrorList = ({ errors }: ErrorListProps) => {
   const intl = useIntl();
+  const [element, setElement] = useState(undefined as unknown);
+
+  useEffect(() => {
+    if (element) {
+      (element as HTMLElement).focus();
+      (element as HTMLElement).scrollIntoView({behavior: 'smooth'});
+    }
+  }, [element])
 
   return (
-    <Paper role="alert" elevation={2}>
-      <Box mb={2} p={2}>
-        <Typography component="h4" variant="h6">
-          {intl.formatMessage({defaultMessage: 'Errors'})}
+    <Paper
+      ref={(el) => {setElement(el)}}
+      id="formula-validation-errors"
+      elevation={2}>
+      <Box role="alert" mb={2} p={2}>
+        <Typography component="h2" variant="h6">
+          {intl.formatMessage({defaultMessage: 'From validation failed'})}
         </Typography>
         <List dense={true}>
           {errors.map((error, i: number) => {
