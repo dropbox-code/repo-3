@@ -17,9 +17,8 @@ const ErrorList = ({ errors }: ErrorListProps) => {
 
   return (
     <Paper
-      id="formula-validation-errors"
       elevation={2}>
-      <Box role="alert" mb={2} p={2}>
+      <Box id="formula-validation-errors" role="alert" mb={2} p={2}>
         <Typography component="h2" variant="h6">
           {intl.formatMessage({defaultMessage: 'From validation failed'})}
         </Typography>
