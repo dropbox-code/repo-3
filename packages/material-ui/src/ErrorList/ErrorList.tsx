@@ -16,10 +16,11 @@ const ErrorList = ({ errors }: ErrorListProps) => {
   const intl = useIntl();
 
   return (
-    <Paper role="alert" elevation={2}>
-      <Box mb={2} p={2}>
-        <Typography component="h4" variant="h6">
-          {intl.formatMessage({defaultMessage: 'Errors'})}
+    <Paper
+      elevation={2}>
+      <Box id="formula-validation-errors" role="alert" mb={2} p={2}>
+        <Typography component="h2" variant="h6">
+          {intl.formatMessage({defaultMessage: 'From validation failed'})}
         </Typography>
         <List dense={true}>
           {errors.map((error, i: number) => {
