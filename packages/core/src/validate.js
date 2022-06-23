@@ -221,8 +221,6 @@ export default function validateFormData(
   ) => {
     for (const key in elements) {
       const element = elements[key];
-      console.log(formData);
-      console.log(element);
       if (element?.type === "object" && element?.format !== "table") {
         removeDataFromValidation(
           element.properties,
