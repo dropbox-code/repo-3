@@ -221,7 +221,7 @@ export default function validateFormData(
   ) => {
     for (const key in elements) {
       const element = elements[key];
-      if (element?.type === "object") {
+      if (element?.type === "object" && element?.format !== "table") {
         removeDataFromValidation(
           element.properties,
           element.required,
@@ -241,7 +241,8 @@ export default function validateFormData(
       } else if (
         !required?.includes(key) &&
         element?.type === "array" &&
-        element?.items.type !== "object" &&
+        (element?.items.type !== "object" ||
+          element?.items.format === "table") &&
         !element?.items.pattern &&
         !element?.items.minimum &&
         !element?.items.maximum &&
