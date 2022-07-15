@@ -342,7 +342,8 @@ function SchemaFieldRender(props) {
         formContext={formContext}
       />
     ),
-    rawDescription: description,
+    rawDescription:
+      uiSchema?.["ui:options"]?.element?.list === false ? description : null,
     help: <Help id={helpId(id)} help={help} />,
     rawHelp: typeof help === "string" ? help : undefined,
     errors: <ErrorList id={errorsId(id)} errors={errors} />,
