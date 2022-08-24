@@ -20,7 +20,7 @@ const ErrorList = ({ errors }: ErrorListProps) => {
       elevation={2}>
       <Box id="formula-validation-errors" role="alert" mb={2} p={2}>
         <Typography component="h2" variant="h6">
-          {intl.formatMessage({defaultMessage: 'From validation failed'})}
+          {intl.formatMessage({defaultMessage: 'Invalid inputs'})}
         </Typography>
         <List dense={true}>
           {errors.map((error, i: number) => {
