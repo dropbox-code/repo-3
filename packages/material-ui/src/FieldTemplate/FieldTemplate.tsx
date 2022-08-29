@@ -38,7 +38,6 @@ const FieldTemplate = ({
   children,
   classNames,
   disabled,
-  displayLabel,
   hidden,
   label,
   onDropPropertyClick,
@@ -54,6 +53,14 @@ const FieldTemplate = ({
   const intl = useIntl();
   if (hidden) {
     return null;
+  }
+
+  const displayLabel = (uiSchema: any) => {
+    if(uiSchema['ui:options'].element.description) {
+      return true
+    } else {
+      return false
+    }
   }
 
   const headerNumber = id.split('_').length + 1;
