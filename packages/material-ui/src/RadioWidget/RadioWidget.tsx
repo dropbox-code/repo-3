@@ -6,6 +6,7 @@ import RadioGroup from "@material-ui/core/RadioGroup";
 import FormControl from '@material-ui/core/FormControl';
 
 import { WidgetProps } from "@visma/rjsf-core";
+import { FormHelperText } from '@material-ui/core';
 
 const RadioWidget = ({
   id,
@@ -34,6 +35,7 @@ const RadioWidget = ({
   return (
     <FormControl component="fieldset">
       <legend style={{position: 'absolute', clip: 'rect(0,0,0,0)'}}>{label}</legend>
+      <FormHelperText component="span" >{options.description}</FormHelperText>
       <RadioGroup
         value={`${value}`}
         row={row as boolean}

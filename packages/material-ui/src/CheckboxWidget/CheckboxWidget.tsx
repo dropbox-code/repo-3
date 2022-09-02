@@ -33,6 +33,7 @@ const CheckboxWidget = (props: WidgetProps) => {
 
   return (
     <FormControl component="fieldset">
+      {options.description && <FormHelperText>{options.description}</FormHelperText>}
       <FormControlLabel
         control={
           <Checkbox
@@ -48,7 +49,6 @@ const CheckboxWidget = (props: WidgetProps) => {
         }
         label={label}
       />
-      {options.description && <FormHelperText>{options.description}</FormHelperText>}
     </FormControl>
   );
 };
