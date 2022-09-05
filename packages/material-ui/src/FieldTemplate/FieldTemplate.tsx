@@ -15,7 +15,10 @@ import WrapIfAdditional from "./WrapIfAdditional";
 const showTitle = (schema: any, uiSchema: any) => {
   if (schema.type === 'array') {
     return schema.items.type !== 'object' && (schema.items.enum || schema.items.enumNames);
-  } else if (uiSchema['ui:widget'] === 'checkbox' || (schema.type === 'boolean' && uiSchema['ui:widget'] !== 'radio')) {
+  } else if (uiSchema['ui:options'].element.type === 'dateRange' && uiSchema['ui:options'].element.list === false) {
+    return (uiSchema['ui:options'].element.title || uiSchema['ui:options'].element.label)
+  }
+  else if (uiSchema['ui:widget'] === 'checkbox' || (schema.type === 'boolean' && uiSchema['ui:widget'] !== 'radio')) {
     return false;
   }
   return schema.format === 'table' || !(schema.type === 'object' || (schema.type === 'string' && schema.title === undefined));
