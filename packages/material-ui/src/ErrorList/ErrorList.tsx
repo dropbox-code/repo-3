@@ -18,11 +18,11 @@ const ErrorList = ({ errors }: ErrorListProps) => {
   return (
     <Paper
       elevation={2}>
-      <Box id="formula-validation-errors" role="alert" mb={2} p={2}>
+      <Box id="formula-validation-errors" mb={2} p={2}>
         <Typography component="h2" variant="h6">
           {intl.formatMessage({defaultMessage: 'Invalid inputs'})}
         </Typography>
-        <List dense={true}>
+        <List role="alert"  dense={true}>
           {errors.map((error, i: number) => {
             return (
               <ListItem key={i}>
