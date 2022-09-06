@@ -227,7 +227,7 @@ const FileWidget = ({
                 <DescriptionIcon />
               </ListItemIcon>
               <ListItemText
-                primary={name}
+                primary={decodeURIComponent(name)}
                 secondary={`${type}, ${prettyBytes(size, { locale })}`}
               />
               <RemoveButton index={key} />
