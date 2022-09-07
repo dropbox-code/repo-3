@@ -226,7 +226,7 @@ const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
           {props.items && props.items.map(p => DefaultArrayItem(p))}
 
           {props.canAdd && (
-            <Grid container justify="flex-end">
+            <Grid container style={{justifyContent: "flex-end"}}>
               <Grid item={true}>
                 <Box mt={2}>
                   <AddButton
