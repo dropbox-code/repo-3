@@ -80,7 +80,7 @@ function BaseInput(props) {
       onChange={_onChange}
       onBlur={onBlur && (event => onBlur(inputProps.id, event.target.value))}
       onFocus={onFocus && (event => onFocus(inputProps.id, event.target.value))}
-      aria-describedby={ariaDescribedBy(inputProps.id)}
+      aria-describedby={ariaDescribedBy(inputProps.id, uiSchema)}
     />,
     schema.examples ? (
       <datalist

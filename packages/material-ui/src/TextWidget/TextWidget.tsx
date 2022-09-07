@@ -100,7 +100,7 @@ const TextWidget = ({
         onChange={_onChange}
         onBlur={_onBlur}
         onFocus={_onFocus}
-        InputProps={{ "aria-describedby": utils.ariaDescribedBy(id), classes: {
+        InputProps={{ "aria-describedby": utils.ariaDescribedBy(id, uiSchema), classes: {
             formControl: classes.inputFormControl
           }
         }}
