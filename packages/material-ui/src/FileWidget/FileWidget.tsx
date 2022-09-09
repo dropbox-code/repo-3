@@ -221,13 +221,17 @@ const FileWidget = ({
       <List id="file-info">
         {filesInfo.map((fileInfo: any, key: any) => {
           const { name, size, type } = fileInfo;
+          let nameDecoded = name;
+          try {
+            nameDecoded = decodeURIComponent(name);
+          } catch {}
           return (
             <ListItem key={key}>
               <ListItemIcon>
                 <DescriptionIcon />
               </ListItemIcon>
               <ListItemText
-                primary={decodeURIComponent(name)}
+                primary={nameDecoded}
                 secondary={`${type}, ${prettyBytes(size, { locale })}`}
               />
               <RemoveButton index={key} />
