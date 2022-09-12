@@ -9,7 +9,7 @@ import DescriptionIcon from "@material-ui/icons/Description";
 import HighlightOffIcon from "@material-ui/icons/HighlightOff";
 import { WidgetProps } from "@visma/rjsf-core";
 import prettyBytes from "pretty-bytes";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useIntl } from "react-intl";
 
 const useStyles = makeStyles({
