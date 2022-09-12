@@ -74,6 +74,7 @@ const FieldTemplate = ({
         classNames={classNames}
         disabled={disabled}
         id={id}
+        uiSchema={uiSchema}
         label={label}
         onDropPropertyClick={onDropPropertyClick}
         onKeyChange={onKeyChange}

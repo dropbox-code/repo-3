@@ -1,6 +1,6 @@
 import React from "react";
 
-import { utils } from "@visma/rjsf-core";
+import { UiSchema, utils } from '@visma/rjsf-core';
 import { JSONSchema7 } from "json-schema";
 
 import Grid from "@material-ui/core/Grid";
@@ -23,6 +23,7 @@ type WrapIfAdditionalProps = {
   readonly: boolean;
   required: boolean;
   schema: JSONSchema7;
+  uiSchema: UiSchema;
 };
 
 const WrapIfAdditional = ({
@@ -30,6 +31,7 @@ const WrapIfAdditional = ({
   disabled,
   id,
   label,
+  uiSchema,
   onDropPropertyClick,
   onKeyChange,
   readonly,
@@ -64,7 +66,7 @@ const WrapIfAdditional = ({
             name={`${id}-key`}
             onBlur={!readonly ? handleBlur : undefined}
             type="text"
-            aria-describedby={utils.ariaDescribedBy(id)}
+            aria-describedby={utils.ariaDescribedBy(id, uiSchema)}
           />
         </FormControl>
       </Grid>
