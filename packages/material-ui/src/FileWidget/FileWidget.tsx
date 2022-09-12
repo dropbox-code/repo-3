@@ -9,7 +9,7 @@ import DescriptionIcon from "@material-ui/icons/Description";
 import HighlightOffIcon from "@material-ui/icons/HighlightOff";
 import { WidgetProps } from "@visma/rjsf-core";
 import prettyBytes from "pretty-bytes";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useIntl } from "react-intl";
 
 const useStyles = makeStyles({
@@ -117,7 +117,7 @@ const FileWidget = ({
   uiSchema,
 }: WidgetProps) => {
   const [state, setState] = useState<FileInfo[]>();
-  const inputRef = React.useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const intl = useIntl();
   const classes = useStyles();
   const { locale } = intl;
@@ -266,7 +266,7 @@ const FileWidget = ({
           : null
       }
       <input
-        ref={inputRef.current}
+        ref={inputRef}
         id={`file-input-${id}`}
         type="file"
         disabled={readonly || disabled}
