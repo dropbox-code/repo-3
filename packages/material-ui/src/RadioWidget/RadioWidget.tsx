@@ -35,7 +35,7 @@ const RadioWidget = ({
   return (
     <FormControl component="fieldset">
       <legend style={{position: 'absolute', clip: 'rect(0,0,0,0)'}}>{label}</legend>
-      <FormHelperText component="span" >{options.description}</FormHelperText>
+      {schema.type === 'boolean' && <FormHelperText component="span" >{options.description}</FormHelperText>}
       <RadioGroup
         value={`${value}`}
         row={row as boolean}
