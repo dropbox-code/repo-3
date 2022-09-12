@@ -117,7 +117,7 @@ const FileWidget = ({
   uiSchema,
 }: WidgetProps) => {
   const [state, setState] = useState<FileInfo[]>();
-  const inputRef = useRef();
+  const inputRef = React.useRef<HTMLInputElement>(null);
   const intl = useIntl();
   const classes = useStyles();
   const { locale } = intl;
@@ -278,7 +278,7 @@ const FileWidget = ({
           })}`
         }
         variant="outlined"
-        onClick={() => document.getElementById(`file-input-${id}`)!.click()}>
+        onClick={() => inputRef.current!.click()}>
         {intl.formatMessage({ defaultMessage: "Choose file" })}
       </Button>
       <FilesInfo filesInfo={state} />
