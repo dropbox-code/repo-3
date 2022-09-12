@@ -246,18 +246,25 @@ const FileWidget = ({
 
   if (!ariaLabel) {
     const element = options!.element as {
-      label: string;
-      title: string;
-      useLabel: boolean;
+      label: string,
+      title: string,
+      labelError: string,
+      useLabel: boolean
     };
-    ariaLabel = element.useLabel ? element.label : element.title;
+    ariaLabel = element.useLabel
+      ? (element.label === "" || !element.label ? element.labelError : element.label)
+      : element.title;
   }
 
   return (
     <>
-      <label htmlFor={`file-input-${id}`} className={classes.inputLabel}>
-        {ariaLabel}
-      </label>
+      {
+        ariaLabel && ariaLabel !== ""
+          ? <label htmlFor={`file-input-${id}`} className={classes.inputLabel}>
+            {ariaLabel}
+          </label>
+          : null
+      }
       <input
         ref={inputRef.current}
         id={`file-input-${id}`}

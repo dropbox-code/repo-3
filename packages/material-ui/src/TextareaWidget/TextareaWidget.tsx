@@ -62,8 +62,15 @@ const TextareaWidget = ({
   let ariaLabel = label;
 
   if (!ariaLabel) {
-    const element = options!.element as {label: string, title: string, useLabel: boolean};
-    ariaLabel = element.useLabel ? element.label : element.title;
+    const element = options!.element as {
+      label: string,
+      title: string,
+      labelError: string,
+      useLabel: boolean
+    };
+    ariaLabel = element.useLabel
+      ? (element.label === "" || !element.label ? element.labelError : element.label)
+      : element.title;
   }
 
   return (
