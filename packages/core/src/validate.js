@@ -262,9 +262,44 @@ export default function validateFormData(
 
   removeDataFromValidation(schema.properties, schema.required, formData, false);
 
+  const addAnyOf = schema => {
+    let errorSchema = { properties: {} };
+
+    if (schema?.type === "array" && schema?.items?.type === "object") {
+      errorSchema.items = addAnyOf(schema.items);
+    } else if (schema.type === "object" && schema.requireAtLeastOne) {
+      const anyOf = [];
+      for (const key in schema.properties) {
+        const schemaObject = { required: [`${key}`], properties: {} };
+        if (schema.properties[key].type === "string") {
+          schemaObject.properties[key] = {
+            minLength: 1,
+          };
+        } else if (schema.properties[key].type === "array") {
+          schemaObject.properties[key] = {
+            minItems: 1,
+          };
+        }
+        anyOf.push(schemaObject);
+      }
+      errorSchema = {
+        ...schema,
+        anyOf: anyOf,
+      };
+    } else if (schema.type === "object" && schema.properties) {
+      for (const key in schema.properties) {
+        errorSchema.properties[key] = addAnyOf(schema.properties[key]);
+      }
+    }
+
+    return errorSchema;
+  };
+
+  const anyOfSchema = addAnyOf(schema);
+
   let validationError = null;
   try {
-    ajv.validate(schema, formData);
+    ajv.validate(anyOfSchema, formData);
   } catch (err) {
     validationError = err;
   }
