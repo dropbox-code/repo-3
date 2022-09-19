@@ -263,7 +263,7 @@ export default function validateFormData(
   removeDataFromValidation(schema.properties, schema.required, formData, false);
 
   const addAnyOf = schema => {
-    let errorSchema = { properties: {} };
+    let errorSchema = { ...schema, properties: {} };
 
     if (schema?.type === "array" && schema?.items?.type === "object") {
       errorSchema.items = addAnyOf(schema.items);
