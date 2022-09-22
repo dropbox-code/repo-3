@@ -97,7 +97,7 @@ const TextareaWidget = ({
       />
       {options.showCharacterCounter &&
       <div>
-        <Typography variant="subtitle2" style={{float: "right"}}>
+        <Typography component="span" variant="subtitle2" style={{float: "right"}}>
           {(value ? value.length : 0)} {schema.maxLength !== undefined && " / " + schema.maxLength}
         </Typography>
       </div>
