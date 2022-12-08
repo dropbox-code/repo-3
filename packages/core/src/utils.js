@@ -1282,11 +1282,14 @@ export const errorsId = id => `${id}__errors`;
 export const ariaDescribedBy = (id, uiSchema) => {
   let ariaId = `${
     uiSchema["ui:description"] ||
-    uiSchema["ui:options"]?.element?.description !== ""
+    uiSchema?.element?.description ||
+    uiSchema["ui:options"]?.element?.description
       ? descriptionId(id, uiSchema)
       : ""
   } ${
-    uiSchema["ui:help"] || uiSchema["ui:options"]?.element?.help !== ""
+    uiSchema["ui:help"] ||
+    uiSchema?.element?.help ||
+    uiSchema["ui:options"]?.element?.help
       ? helpId(id, uiSchema)
       : ""
   }`;
