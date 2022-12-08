@@ -346,6 +346,9 @@ export function mergeDefaultsWithFormData(defaults, formData) {
       if (defaults[idx]) {
         return mergeDefaultsWithFormData(defaults[idx], value);
       }
+      if (value === null) {
+        return mergeDefaultsWithFormData(defaults[idx], undefined);
+      }
       return value;
     });
   } else if (isObject(formData)) {
