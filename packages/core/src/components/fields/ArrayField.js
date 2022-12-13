@@ -336,7 +336,7 @@ class ArrayField extends Component {
       if (event) {
         event.preventDefault();
       }
-      const { onChange } = this.props;
+      const { onChange, schema } = this.props;
       const { keyedFormData } = this.state;
       // refs #195: revalidate to ensure properly reindexing errors
       let newErrorSchema;
@@ -353,13 +353,15 @@ class ArrayField extends Component {
         }
       }
       const newKeyedFormData = keyedFormData.filter((_, i) => i !== index);
-      this.setState(
-        {
-          keyedFormData: newKeyedFormData,
-          updatedKeyedFormData: true,
-        },
-        () => onChange(keyedToPlainFormData(newKeyedFormData), newErrorSchema)
-      );
+      if (newKeyedFormData.length >= schema.minItems) {
+        this.setState(
+          {
+            keyedFormData: newKeyedFormData,
+            updatedKeyedFormData: true,
+          },
+          () => onChange(keyedToPlainFormData(newKeyedFormData), newErrorSchema)
+        );
+      }
     };
   };
 
