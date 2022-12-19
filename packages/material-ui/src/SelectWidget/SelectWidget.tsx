@@ -5,6 +5,7 @@ import TextField from "@material-ui/core/TextField";
 
 import { utils, WidgetProps } from "@visma/rjsf-core";
 import { makeStyles } from '@material-ui/core/styles';
+import Typography from '@material-ui/core/Typography';
 
 const useStyles = makeStyles({
   inputLabelRoot: {
@@ -57,6 +58,14 @@ const processValue = (schema: any, value: any) => {
   return value;
 };
 
+const getScore = (choices: {enumNames: string, enum?: string, meta?: {score: number}}[], value: string) => {
+  let choice = choices.find(choice => choice.enum === value);
+  if (!choice) {
+    choice = choices[Number(value)];
+  }
+  return choice && choice.meta ? choice.meta.score : 0;
+}
+
 const SelectWidget = ({
   schema,
   id,
@@ -88,6 +97,11 @@ const SelectWidget = ({
   }: React.FocusEvent<HTMLInputElement>) =>
     onFocus(id, processValue(schema, value));
 
+  const showScore = options ? options.showScore : false;
+  const rawChoices = options && options!.element ?
+    (options!.element! as {choices: {enumNames: string, enum?: string, meta?: {score: number}}[]}).choices :
+    [];
+
   const classes = useStyles();
 
   let ariaLabel = label;
@@ -105,42 +119,52 @@ const SelectWidget = ({
   }
 
   return (
-    <TextField
-      id={id}
-      select
-      value={typeof value === "undefined" ? emptyValue : value}
-      required={required}
-      label={ariaLabel}
-      disabled={disabled || readonly}
-      autoFocus={autofocus}
-      error={rawErrors.length > 0}
-      onChange={_onChange}
-      onBlur={_onBlur}
-      onFocus={_onFocus}
-      InputProps={{
-        id: `${id}-input`,
-        classes: {formControl: classes.inputFormControl }
-      }}
-      InputLabelProps={{
-        htmlFor: `${id}-input`,
-        shrink: false,
-        className: classes.inputLabelRoot
-      }}
-      SelectProps={{
-        labelId: `${id}-label`,
-        multiple: typeof multiple === "undefined" ? false : multiple,
-        "aria-describedby": utils.ariaDescribedBy(id, options),
-      }}>
-      {(enumOptions as any).map(({ value, label }: any, i: number) => {
-        const disabled: any =
-          enumDisabled && (enumDisabled as any).indexOf(value) != -1;
-        return (
-          <MenuItem key={i} value={value} disabled={disabled}>
-            {label}
-          </MenuItem>
-        );
-      })}
-    </TextField>
+    <div style={{display: 'flex'}}>
+      <div style={{flex: '1 1'}}>
+        <TextField
+          id={id}
+          select
+          fullWidth
+          value={typeof value === "undefined" ? emptyValue : value}
+          required={required}
+          label={ariaLabel}
+          disabled={disabled || readonly}
+          autoFocus={autofocus}
+          error={rawErrors.length > 0}
+          onChange={_onChange}
+          onBlur={_onBlur}
+          onFocus={_onFocus}
+          InputProps={{
+            id: `${id}-input`,
+            classes: {formControl: classes.inputFormControl }
+          }}
+          InputLabelProps={{
+            htmlFor: `${id}-input`,
+            shrink: false,
+            className: classes.inputLabelRoot
+          }}
+          SelectProps={{
+            labelId: `${id}-label`,
+            multiple: typeof multiple === "undefined" ? false : multiple,
+            "aria-describedby": utils.ariaDescribedBy(id, options),
+          }}>
+          {(enumOptions as any).map(({ value, label }: any, i: number) => {
+            const disabled: any =
+              enumDisabled && (enumDisabled as any).indexOf(value) != -1;
+            return (
+              <MenuItem key={i} value={value} disabled={disabled}>
+                {label}
+              </MenuItem>
+            );
+          })}
+        </TextField>
+      </div>
+      { (showScore && value) &&
+        <Typography>{
+          getScore(rawChoices, value)
+        }</Typography>
+      }
+    </div>
   );
 };
 
