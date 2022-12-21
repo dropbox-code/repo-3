@@ -336,7 +336,7 @@ class ArrayField extends Component {
       if (event) {
         event.preventDefault();
       }
-      const { onChange, schema } = this.props;
+      const { onChange, uiSchema } = this.props;
       const { keyedFormData } = this.state;
       // refs #195: revalidate to ensure properly reindexing errors
       let newErrorSchema;
@@ -353,7 +353,12 @@ class ArrayField extends Component {
         }
       }
       const newKeyedFormData = keyedFormData.filter((_, i) => i !== index);
-      if (newKeyedFormData.length >= schema.minItems) {
+      if (
+        !uiSchema?.items["ui:options"]?.element?.minItems ||
+        (uiSchema?.items["ui:options"]?.element?.minItems &&
+          newKeyedFormData.length >=
+            uiSchema?.items["ui:options"]?.element?.minItems)
+      ) {
         this.setState(
           {
             keyedFormData: newKeyedFormData,
