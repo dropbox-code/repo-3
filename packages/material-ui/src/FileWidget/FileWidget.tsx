@@ -200,7 +200,7 @@ const FileWidget = ({
         const newValues = value.splice(index, 1);
         onChange(newValues);
       } else {
-        onChange(null);
+        onChange(undefined);
       }
     };
 
