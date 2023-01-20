@@ -217,16 +217,27 @@ export default function validateFormData(
     elements,
     required,
     formData,
-    objectList
+    objectList,
+    handleFalseAsUndefined
   ) => {
     for (const key in elements) {
       const element = elements[key];
+      if (
+        handleFalseAsUndefined &&
+        element?.type === "boolean" &&
+        formData[key] === false
+      ) {
+        formData[key] = undefined;
+      }
       if (element?.type === "object" && element?.format !== "table") {
         removeDataFromValidation(
           element.properties,
           element.required,
           formData[key],
-          false
+          false,
+          element.handleFalseAsUndefined !== undefined
+            ? element.handleFalseAsUndefined
+            : false
         );
       } else if (
         element?.type === "array" &&
@@ -236,7 +247,8 @@ export default function validateFormData(
           element.items.properties,
           element.items.required,
           formData[key],
-          true
+          true,
+          false
         );
       } else if (
         !required?.includes(key) &&
@@ -260,7 +272,13 @@ export default function validateFormData(
     }
   };
 
-  removeDataFromValidation(schema.properties, schema.required, formData, false);
+  removeDataFromValidation(
+    schema.properties,
+    schema.required,
+    formData,
+    false,
+    false
+  );
 
   const addAnyOf = schema => {
     let errorSchema = { ...schema, properties: {} };
