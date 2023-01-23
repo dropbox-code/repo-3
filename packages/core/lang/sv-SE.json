@@ -43,5 +43,11 @@
   },
   "9XTsp0": {
     "defaultMessage": "Ogiltiga ingångar"
+  },
+  "Q7OsfP": {
+    "defaultMessage": "Filen \"{name}\" accepteras inte. Godkända filtillägg är: {accept}."
+  },
+  "YZMoKC": {
+    "defaultMessage": "Filen \"{name}\" accepteras inte. Den maximala filstorleken är {size}."
   }
 }
