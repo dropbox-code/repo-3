@@ -225,11 +225,11 @@ export default function validateFormData(
       if (
         handleFalseAsUndefined &&
         element?.type === "boolean" &&
+        element?.additionalType !== "consent" &&
         formData[key] === false
       ) {
         formData[key] = undefined;
-      }
-      if (element?.type === "object" && element?.format !== "table") {
+      } else if (element?.type === "object" && element?.format !== "table") {
         removeDataFromValidation(
           element.properties,
           element.required,
@@ -248,7 +248,9 @@ export default function validateFormData(
           element.items.required,
           formData[key],
           true,
-          false
+          element.handleFalseAsUndefined !== undefined
+            ? element.handleFalseAsUndefined
+            : false
         );
       } else if (
         !required?.includes(key) &&
@@ -288,17 +290,22 @@ export default function validateFormData(
     } else if (schema.type === "object" && schema.requireAtLeastOne) {
       const anyOf = [];
       for (const key in schema.properties) {
-        const schemaObject = { required: [`${key}`], properties: {} };
-        if (schema.properties[key].type === "string") {
-          schemaObject.properties[key] = {
-            minLength: 1,
-          };
-        } else if (schema.properties[key].type === "array") {
-          schemaObject.properties[key] = {
-            minItems: 1,
-          };
+        if (
+          !schema.properties[key].additionalType ||
+          schema.properties[key].additionalType === "consent"
+        ) {
+          const schemaObject = { required: [`${key}`], properties: {} };
+          if (schema.properties[key].type === "string") {
+            schemaObject.properties[key] = {
+              minLength: 1,
+            };
+          } else if (schema.properties[key].type === "array") {
+            schemaObject.properties[key] = {
+              minItems: 1,
+            };
+          }
+          anyOf.push(schemaObject);
         }
-        anyOf.push(schemaObject);
       }
       errorSchema = {
         ...schema,
