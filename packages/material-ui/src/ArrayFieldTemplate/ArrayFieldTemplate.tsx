@@ -13,6 +13,7 @@ import AddButton from '../AddButton/AddButton';
 import IconButton from '../IconButton/IconButton';
 import Typography from '@material-ui/core/Typography';
 import Divider from '@material-ui/core/Divider';
+import { JSONSchema7 } from 'json-schema';
 
 const {
   isMultiSelect,
@@ -42,9 +43,11 @@ type ArrayFieldTitleProps = {
   idSchema: IdSchema;
   title: string;
   required: boolean;
+  schema: JSONSchema7;
 };
 
 const ArrayFieldTitle = ({
+  schema,
   idSchema,
   title,
   required
@@ -60,8 +63,9 @@ const ArrayFieldTitle = ({
     <Box id={id} mb={1} mt={1}>
       <Typography
         component={
-          headerNumber === 2 ? "h2"
-          : headerNumber === 3 ? "h3" : "h4"
+          (schema.items && (schema.items as JSONSchema7).type === 'object')
+            ? (headerNumber === 2 ? "h2" : "h3")
+            : "label"
         }
         variant="subtitle1">{required ? title + ' *' : title}</Typography>
       <Divider />
@@ -170,6 +174,7 @@ const DefaultFixedArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
         idSchema={props.idSchema}
         title={props.uiSchema['ui:title'] || props.title}
         required={props.required}
+        schema={props.schema}
       />
 
       {(props.uiSchema['ui:description'] || props.schema.description) && (
@@ -209,6 +214,7 @@ const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
           idSchema={props.idSchema}
           title={props.uiSchema['ui:title'] || props.title}
           required={props.required}
+          schema={props.schema}
         />
 
         {(props.uiSchema['ui:description'] || props.schema.description) && (
