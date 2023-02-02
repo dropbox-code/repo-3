@@ -66,8 +66,6 @@ const FieldTemplate = ({
     }
   }
 
-  const headerNumber = id.split('_').length + 1;
-
   return (
     <Box pl={uiSchema['ui:options'] && indentation(uiSchema['ui:options']!.element) ? 3 : 0}>
       <WrapIfAdditional
@@ -87,13 +85,10 @@ const FieldTemplate = ({
           required={required}>
           {showTitle(schema, uiSchema) && getLabel(uiSchema, label) && getLabel(uiSchema, label).trim() !== '' ?
             <Typography
-              aria-label={required ? intl.formatMessage({defaultMessage: 'Required field'}) : undefined}
-              component={ headerNumber === 2 ? "h2"
-                : headerNumber === 3 ? "h3" : "h4"
-              }
+              component="label"
               variant="subtitle1">
               { getLabel(uiSchema, label) }
-              { required ? ' *' : null }
+              { required && <> <abbr title={intl.formatMessage({defaultMessage: 'Required field'})}>*</abbr></> }
             </Typography>
             : null}
           {displayLabel && rawDescription && (schema.type !== 'boolean' || uiSchema['ui:widget'] === 'radio') ? (
