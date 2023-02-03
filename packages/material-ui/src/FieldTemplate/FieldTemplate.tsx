@@ -85,7 +85,7 @@ const FieldTemplate = ({
           required={required}>
           {showTitle(schema, uiSchema) && getLabel(uiSchema, label) && getLabel(uiSchema, label).trim() !== '' ?
             <Typography
-              component="label"
+              component="p"
               variant="subtitle1">
               { getLabel(uiSchema, label) }
               { required && <> <abbr title={intl.formatMessage({defaultMessage: 'Required field'})}>*</abbr></> }

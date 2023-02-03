@@ -65,7 +65,7 @@ const ArrayFieldTitle = ({
         component={
           (schema.items && (schema.items as JSONSchema7).type === 'object')
             ? (headerNumber === 2 ? "h2" : "h3")
-            : "label"
+            : "p"
         }
         variant="subtitle1">{required ? title + ' *' : title}</Typography>
       <Divider />
