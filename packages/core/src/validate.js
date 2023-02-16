@@ -169,6 +169,29 @@ function transformAjvErrors(errors = []) {
   });
 }
 
+function addAnyOfAdditionalParams(errors = []) {
+  if (errors === null) {
+    return [];
+  }
+
+  const anyOfErrorPaths = errors
+    .filter(error => error.keyword === "anyOf")
+    .map(error => error.dataPath);
+  const modifiedErrors = errors.map(error => {
+    if (
+      anyOfErrorPaths.some(path => error.dataPath.startsWith(path)) &&
+      (error.keyword === "required" ||
+        (error.keyword === "minLength" && error.params.limit === 1) ||
+        (error.keyword === "minItems" && error.params.limit === 1))
+    ) {
+      return { ...error, keyword: "anyOfRequired" };
+    } else {
+      return error;
+    }
+  });
+  return modifiedErrors;
+}
+
 /**
  * This function processes the formData with a user `validate` contributed
  * function, which receives the form data and an `errorHandler` object that
@@ -331,7 +354,8 @@ export default function validateFormData(
 
   localize[intl.locale.split("-")[0]](ajv.errors);
 
-  let errors = transformAjvErrors(ajv.errors);
+  let errors = addAnyOfAdditionalParams(ajv.errors);
+  errors = transformAjvErrors(errors);
   // Clear errors to prevent persistent errors, see #1104
 
   ajv.errors = null;

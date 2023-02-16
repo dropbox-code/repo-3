@@ -36,6 +36,19 @@ const indentation = (element: any) => {
   return element.indent;
 }
 
+const ErrorList = (props: {id: string, errors: string[]}) => {
+  const {id, errors} = props;
+  return (<List id={utils.errorsId(id)} dense={true} disablePadding={true}>
+    {errors.map((error, i: number) => {
+      return (
+        <ListItem key={i} disableGutters={true}>
+          <FormHelperText>{error}</FormHelperText>
+        </ListItem>
+      );
+    })}
+  </List>);
+}
+
 const FieldTemplate = ({
   id,
   children,
@@ -57,6 +70,8 @@ const FieldTemplate = ({
   if (hidden) {
     return null;
   }
+
+  const { type } = schema;
 
   const displayLabel = (uiSchema: any) => {
     if(uiSchema['ui:options'].element.description) {
@@ -104,17 +119,12 @@ const FieldTemplate = ({
               {rawDescription}
             </Typography>
           ) : null}
+          {rawErrors.length > 0 && type === 'object' && (
+            <ErrorList id={id} errors={rawErrors} />
+          )}
           {children}
-          {rawErrors.length > 0 && (
-            <List id={utils.errorsId(id)} dense={true} disablePadding={true}>
-              {rawErrors.map((error, i: number) => {
-                return (
-                  <ListItem key={i} disableGutters={true}>
-                    <FormHelperText>{error}</FormHelperText>
-                  </ListItem>
-                );
-              })}
-            </List>
+          {rawErrors.length > 0 && type !== 'object' && (
+            <ErrorList id={id} errors={rawErrors} />
           )}
           {rawHelp && (
             <FormHelperText id={utils.helpId(id)}>{rawHelp}</FormHelperText>
