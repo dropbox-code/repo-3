@@ -32,13 +32,15 @@ const ObjectFieldTemplate = ({
   idSchema,
   schema,
   formData,
-  onAddClick,
+  onAddClick
 }: ObjectFieldTemplateProps) => {
   const classes = useStyles();
 
+  const isInArray = idSchema.$id.split('_').length >= 3;
+
   return (
     <>
-      {(uiSchema['ui:title'] || title) && (
+      {(uiSchema['ui:title'] || title) && !isInArray && (
         <Box id={`${idSchema.$id}-title`} mb={1} mt={1}>
           <Typography component={idSchema.$id === 'root' ? 'h2' : 'h3'} variant="subtitle1" style={{fontSize: 18}}>{title}</Typography>
           <Divider />
