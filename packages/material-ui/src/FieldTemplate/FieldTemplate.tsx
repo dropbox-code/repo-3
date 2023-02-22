@@ -100,6 +100,7 @@ const FieldTemplate = ({
           required={required}>
           {showTitle(schema, uiSchema) && getLabel(uiSchema, label) && getLabel(uiSchema, label).trim() !== '' ?
             <Typography
+              aria-hidden={true}
               component="p"
               variant="subtitle1">
               { getLabel(uiSchema, label) }

@@ -5,7 +5,7 @@ import FormControlLabel from "@material-ui/core/FormControlLabel";
 import Checkbox from "@material-ui/core/Checkbox";
 import FormControl from '@material-ui/core/FormControl';
 
-import { WidgetProps } from "@visma/rjsf-core";
+import { utils, WidgetProps } from '@visma/rjsf-core';
 
 const selectValue = (value: any, selected: any, all: any) => {
   const at = all.indexOf(value);
@@ -24,6 +24,7 @@ const CheckboxesWidget = ({
   id,
   disabled,
   label,
+  required,
   options,
   value,
   autofocus,
@@ -55,7 +56,7 @@ const CheckboxesWidget = ({
 
   return (
     <FormControl component="fieldset">
-      <legend style={{position: 'absolute', clip: 'rect(0,0,0,0)'}}>{label}</legend>
+      <legend style={{position: 'absolute', clip: 'rect(0,0,0,0)'}}>{utils.generateAriaLabel(label, options, required)}</legend>
       <FormGroup row={!!inline}>
         {(enumOptions as any).map((option: any, index: number) => {
           const checked = value.indexOf(option.value) !== -1;

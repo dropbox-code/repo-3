@@ -6,7 +6,7 @@ import RadioGroup from "@material-ui/core/RadioGroup";
 import FormControl from '@material-ui/core/FormControl';
 import Typography from '@material-ui/core/Typography';
 
-import { WidgetProps } from "@visma/rjsf-core";
+import { utils, WidgetProps } from '@visma/rjsf-core';
 import { FormHelperText } from '@material-ui/core';
 
 const getScore = (choices: {enumNames: string, enum?: string, meta?: {score: number}}[], value: string) => {
@@ -23,6 +23,7 @@ const RadioWidget = ({
   label,
   options,
   value,
+  required,
   disabled,
   readonly,
   onChange,
@@ -49,7 +50,7 @@ const RadioWidget = ({
     <div style={{display: 'flex'}}>
       <div style={{flex: '1 1'}}>
         <FormControl component="fieldset">
-          <legend style={{position: 'absolute', clip: 'rect(0,0,0,0)'}}>{label}</legend>
+          <legend style={{position: 'absolute', clip: 'rect(0,0,0,0)'}}>{utils.generateAriaLabel(label, options, required)}</legend>
           {schema.type === 'boolean' && <FormHelperText component="span" >{options.description}</FormHelperText>}
           <RadioGroup
             value={`${value}`}

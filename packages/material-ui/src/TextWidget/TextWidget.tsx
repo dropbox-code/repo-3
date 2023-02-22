@@ -77,20 +77,6 @@ const TextWidget = ({
   const classes = useStyles();
   const inputType = (type || schema.type) === 'string' ?  'text' : `${type || schema.type}`
 
-  let ariaLabel = label;
-
-  if (!ariaLabel) {
-    const element = options!.element as {
-      label: string,
-      title: string,
-      labelError: string,
-      useLabel: boolean
-    };
-    ariaLabel = element.useLabel
-      ? (element.label === "" || !element.label ? element.labelError : element.label)
-      : element.title;
-  }
-
   return (
     <>
       <TextField
@@ -98,7 +84,7 @@ const TextWidget = ({
         placeholder={placeholder}
         autoFocus={autofocus}
         required={required}
-        label={ariaLabel}
+        label={utils.generateAriaLabel(label, options, required)}
         hiddenLabel
         disabled={disabled || readonly}
         type={inputType as string}
@@ -107,7 +93,9 @@ const TextWidget = ({
         onChange={_onChange}
         onBlur={_onBlur}
         onFocus={_onFocus}
-        InputProps={{ "aria-describedby": utils.ariaDescribedBy(id, uiSchema), classes: {
+        InputProps={{
+          "aria-describedby": utils.ariaDescribedBy(id, uiSchema),
+          classes: {
             formControl: classes.inputFormControl
           }
         }}

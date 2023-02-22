@@ -48,10 +48,17 @@ const ArrayFieldTitle = ({
   return (
     <Box id={id} mb={1} mt={1}>
       <Typography
-        component={
-          (schema.items && (schema.items as JSONSchema7).type === 'object')
-            ? (headerNumber === 2 ? "h2" : "h3")
-            : "p"
+        {
+          ...(schema.items && (schema.items as JSONSchema7).type === 'object')
+            ?
+            {
+              component: headerNumber === 2 ? "h2" : "h3",
+            }
+            :
+            {
+              component: "p",
+              'aria-hidden': true
+            }
         }
         variant="subtitle1">
         {title}
