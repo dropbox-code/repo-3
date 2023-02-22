@@ -3,6 +3,7 @@
 declare module '@visma/rjsf-core' {
     import * as React from 'react';
     import { JSONSchema7, JSONSchema7Definition, JSONSchema7Type, JSONSchema7TypeName } from 'json-schema';
+  import { string } from 'prop-types';
 
     type ErrorSchema = {
         [k: string]: ErrorSchema;
@@ -448,6 +449,10 @@ declare module '@visma/rjsf-core' {
         export function errorsId(id: string): string;
 
         export function ariaDescribedBy(id: string, uiSchema: UiSchema): string;
+
+        export function getGlobalMessage(messageName: string): string;
+
+        export function generateAriaLabel(label: string, options: NonNullable<UiSchema['ui:options']>, required: boolean): string;
     }
 }
 
