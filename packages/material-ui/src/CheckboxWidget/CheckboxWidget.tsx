@@ -6,7 +6,6 @@ import { FormHelperText } from "@material-ui/core";
 
 import { utils, WidgetProps } from '@visma/rjsf-core';
 import FormControl from '@material-ui/core/FormControl';
-import { useIntl } from 'react-intl';
 
 
 const CheckboxWidget = (props: WidgetProps) => {
@@ -22,8 +21,6 @@ const CheckboxWidget = (props: WidgetProps) => {
     options,
     required,
   } = props;
-  const intl = useIntl();
-
   const _onChange = ({}, checked: boolean) => onChange(checked);
   const _onBlur = ({
     target: { value },
@@ -52,7 +49,7 @@ const CheckboxWidget = (props: WidgetProps) => {
         label={
         <span>
           { props.label }
-          { required && <> <abbr title={intl.formatMessage({defaultMessage: 'Required field'})}>*</abbr></> }
+          { required && " *"}
         </span>}
       />
     </FormControl>
