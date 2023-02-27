@@ -7,6 +7,7 @@ import jsonpointer from "jsonpointer";
 import fields from "./components/fields";
 import widgets from "./components/widgets";
 import validateFormData, { isValid } from "./validate";
+import { useIntl, defineMessages } from "react-intl";
 
 export const ADDITIONAL_PROPERTY_FLAG = "__additional_property";
 
@@ -1299,6 +1300,36 @@ export const ariaDescribedBy = (id, uiSchema) => {
   if (ariaId !== "" && ariaId.length > 2) {
     return ariaId;
   }
+};
+
+const globalMessages = defineMessages({
+  required: { defaultMessage: "Required field" },
+});
+
+export const getGlobalMessage = messageName => {
+  const intl = useIntl();
+  return globalMessages[messageName]
+    ? intl.formatMessage(globalMessages[messageName])
+    : "";
+};
+
+export const generateAriaLabel = (label, options, required) => {
+  let ariaLabel = label;
+
+  if (!ariaLabel) {
+    const element = options.element;
+    ariaLabel = element.useLabel
+      ? element.label === "" || !element.label
+        ? element.labelError
+        : element.label
+      : element.title;
+  }
+
+  if (required) {
+    ariaLabel = `${getGlobalMessage("required")}: ${ariaLabel}`;
+  }
+
+  return ariaLabel;
 };
 
 export const Context = createContext();

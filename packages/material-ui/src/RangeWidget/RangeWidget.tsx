@@ -90,6 +90,7 @@ const RangeWidget = ({
   readonly,
   disabled,
   onBlur,
+  required,
   onFocus,
   options,
   schema,
@@ -116,17 +117,10 @@ const RangeWidget = ({
       ? generateMarks(sliderProps.min, sliderProps.max, sliderProps.step)
       : generateEndpointMarks(sliderProps.min, sliderProps.max);
 
-  let ariaLabel = label;
-
-  if (!ariaLabel) {
-    const element = options!.element as {label: string, title: string, useLabel: boolean};
-    ariaLabel = element.useLabel ? element.label : element.title;
-  }
-
   return (
     <>
       <Slider
-        aria-label={ariaLabel}
+        aria-label={utils.generateAriaLabel(label, options, required)}
         disabled={disabled || readonly}
         onChange={_onChange}
         onBlur={_onBlur}

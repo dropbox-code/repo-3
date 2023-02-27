@@ -104,20 +104,6 @@ const SelectWidget = ({
 
   const classes = useStyles();
 
-  let ariaLabel = label;
-
-  if (!ariaLabel) {
-    const element = options!.element as {
-      label: string,
-      title: string,
-      labelError: string,
-      useLabel: boolean
-    };
-    ariaLabel = element.useLabel
-      ? (element.label === "" || !element.label ? element.labelError : element.label)
-      : element.title;
-  }
-
   return (
     <div style={{display: 'flex'}}>
       <div style={{flex: '1 1'}}>
@@ -127,7 +113,7 @@ const SelectWidget = ({
           fullWidth
           value={typeof value === "undefined" ? emptyValue : value}
           required={required}
-          label={ariaLabel}
+          label={utils.generateAriaLabel(label, options, required)}
           disabled={disabled || readonly}
           autoFocus={autofocus}
           error={rawErrors.length > 0}

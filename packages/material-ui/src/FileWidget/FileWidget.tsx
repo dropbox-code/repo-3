@@ -7,7 +7,7 @@ import ListItemText from "@material-ui/core/ListItemText";
 import { makeStyles } from "@material-ui/core/styles";
 import DescriptionIcon from "@material-ui/icons/Description";
 import HighlightOffIcon from "@material-ui/icons/HighlightOff";
-import { WidgetProps } from "@visma/rjsf-core";
+import { utils, WidgetProps } from '@visma/rjsf-core';
 import prettyBytes from "pretty-bytes";
 import React, { useEffect, useRef, useState } from "react";
 import { useIntl } from "react-intl";
@@ -114,6 +114,7 @@ const FileWidget = ({
   autofocus,
   onChange,
   label,
+  required,
   uiSchema,
 }: WidgetProps) => {
   const [state, setState] = useState<FileInfo[]>();
@@ -242,19 +243,7 @@ const FileWidget = ({
     );
   };
 
-  let ariaLabel = label;
-
-  if (!ariaLabel) {
-    const element = options!.element as {
-      label: string,
-      title: string,
-      labelError: string,
-      useLabel: boolean
-    };
-    ariaLabel = element.useLabel
-      ? (element.label === "" || !element.label ? element.labelError : element.label)
-      : element.title;
-  }
+  const ariaLabel = utils.generateAriaLabel(label, options, required);
 
   return (
     <>

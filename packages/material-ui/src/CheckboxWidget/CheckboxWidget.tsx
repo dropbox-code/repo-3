@@ -4,7 +4,7 @@ import Checkbox from "@material-ui/core/Checkbox";
 import FormControlLabel from "@material-ui/core/FormControlLabel";
 import { FormHelperText } from "@material-ui/core";
 
-import { WidgetProps } from "@visma/rjsf-core";
+import { utils, WidgetProps } from '@visma/rjsf-core';
 import FormControl from '@material-ui/core/FormControl';
 
 
@@ -21,8 +21,6 @@ const CheckboxWidget = (props: WidgetProps) => {
     options,
     required,
   } = props;
-  let label = required ? props.label + " *" : props.label;
-
   const _onChange = ({}, checked: boolean) => onChange(checked);
   const _onBlur = ({
     target: { value },
@@ -47,7 +45,12 @@ const CheckboxWidget = (props: WidgetProps) => {
             onFocus={_onFocus}
           />
         }
-        label={label}
+        aria-label={utils.generateAriaLabel(props.label, options, required)}
+        label={
+        <span>
+          { props.label }
+          { required && " *"}
+        </span>}
       />
     </FormControl>
   );
