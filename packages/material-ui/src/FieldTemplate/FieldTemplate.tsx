@@ -80,7 +80,12 @@ const FieldTemplate = ({
   }
 
   return (
-    <Box pl={uiSchema['ui:options'] && indentation(uiSchema['ui:options']!.element) ? 3 : 0}>
+    <Box pl={
+      uiSchema['ui:options']
+      && indentation(uiSchema['ui:options']!.element)
+        ? 3 * indentation(uiSchema['ui:options']!.element)
+        : 0
+    }>
       <WrapIfAdditional
         classNames={classNames}
         disabled={disabled}
