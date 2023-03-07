@@ -32,6 +32,9 @@ const getLabel = (uiSchema: any, defaultLabel: string) => {
 }
 
 const indentation = (element: any) => {
+  if (element.list || (!element.list && element.listItem)) {
+    return 0;
+  }
   return element.indent;
 }
 
