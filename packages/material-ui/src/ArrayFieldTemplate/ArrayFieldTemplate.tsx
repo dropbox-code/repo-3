@@ -250,7 +250,12 @@ const ArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
   const { schema, registry = getDefaultRegistry(), uiSchema } = props;
 
   return(
-    <Box pl={uiSchema.items && uiSchema.items!['ui:options'] && indentation(uiSchema.items!['ui:options']!.element) ? 3 : 0}>
+    <Box pl={
+      uiSchema.items && uiSchema.items!['ui:options']
+      && indentation(uiSchema.items!['ui:options']!.element)
+        ? 3 * indentation(uiSchema.items!['ui:options']!.element)
+        : 0
+    }>
       {
         isMultiSelect(schema, registry.rootSchema)
           ? <DefaultFixedArrayFieldTemplate {...props} />
