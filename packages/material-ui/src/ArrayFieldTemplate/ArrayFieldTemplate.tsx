@@ -120,28 +120,52 @@ const DefaultArrayItem = (props: any) => {
       {props.hasToolbar && (
         <Grid item={true}>
           {(props.hasMoveUp || props.hasMoveDown) && (
-            <IconButton
-              icon="arrow-up"
-              className="array-item-move-up"
-              aria-label={intl.formatMessage({defaultMessage: 'Move up'})}
-              //tabIndex={-1}
-              style={btnStyle as any}
-              iconProps={{ fontSize: 'small' }}
-              disabled={props.disabled || props.readonly || !props.hasMoveUp}
-              onClick={props.onReorderClick(props.index, props.index - 1)}
-            />
+            <>
+              <IconButton
+                icon="arrow-up"
+                className="array-item-move-up"
+                aria-label={intl.formatMessage({defaultMessage: 'Move up'})}
+                //tabIndex={-1}
+                style={btnStyle as any}
+                iconProps={{ fontSize: 'small' }}
+                disabled={props.disabled || props.readonly || !props.hasMoveUp}
+                onClick={props.onReorderClick(props.index, props.index - 1)}
+              />
+              <IconButton
+                icon="arrow-down"
+                aria-label={intl.formatMessage({defaultMessage: 'Move down'})}
+                //tabIndex={-1}
+                style={btnStyle as any}
+                iconProps={{ fontSize: 'small' }}
+                disabled={props.disabled || props.readonly || !props.hasMoveDown}
+                onClick={props.onReorderClick(props.index, props.index + 1)}
+              />
+            </>
           )}
 
-          {(props.hasMoveUp || props.hasMoveDown) && (
-            <IconButton
-              icon="arrow-down"
-              aria-label={intl.formatMessage({defaultMessage: 'Move down'})}
-              //tabIndex={-1}
-              style={btnStyle as any}
-              iconProps={{ fontSize: 'small' }}
-              disabled={props.disabled || props.readonly || !props.hasMoveDown}
-              onClick={props.onReorderClick(props.index, props.index + 1)}
-            />
+          {(props.hasMoveUp || props.hasMoveDown) && props.extraOptions && (
+            <>
+              <IconButton
+                icon="double-arrow-up"
+                className="array-item-move-up"
+                aria-label={intl.formatMessage({defaultMessage: 'Move first'})}
+                //tabIndex={-1}
+                style={btnStyle as any}
+                iconProps={{ fontSize: 'small' }}
+                disabled={props.disabled || props.readonly || !props.hasMoveUp}
+                onClick={props.onReorderClick(props.index, 0)}
+              />
+              <IconButton
+                icon="double-arrow-down"
+                className="array-item-move-up"
+                aria-label={intl.formatMessage({defaultMessage: 'Move last'})}
+                //tabIndex={-1}
+                style={btnStyle as any}
+                iconProps={{ fontSize: 'small' }}
+                disabled={props.disabled || props.readonly || !props.hasMoveDown}
+                onClick={props.onReorderClick(props.index, props.size - 1)}
+              />
+            </>
           )}
 
           {props.hasRemove && (
@@ -162,6 +186,7 @@ const DefaultArrayItem = (props: any) => {
 };
 
 const DefaultFixedArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
+  console.log(props);
   return (
     <fieldset className={props.className}>
       <ArrayFieldTitle
@@ -186,7 +211,9 @@ const DefaultFixedArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
         className="row array-item-list"
         key={`array-item-list-${props.idSchema.$id}`}
       >
-        {props.items && props.items.map(DefaultArrayItem)}
+        {props.items && props.items.map(p => DefaultArrayItem(
+          {...p, size: props.items.length, extraOptions: (props.schema as any).extraListOptions}
+        ))}
       </div>
 
       {props.canAdd && (
@@ -201,6 +228,7 @@ const DefaultFixedArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
 };
 
 const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
+  console.log(props);
   return (
     <Paper elevation={2}>
       <Box p={2}>
@@ -225,7 +253,9 @@ const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
         )}
 
         <Grid container={true} key={`array-item-list-${props.idSchema.$id}`}>
-          {props.items && props.items.map(p => DefaultArrayItem(p))}
+          {props.items && props.items.map(p => DefaultArrayItem(
+            {...p, size: props.items.length, extraOptions: (props.schema as any).extraListOptions}
+          ))}
 
           {props.canAdd && (
             <Grid container style={{justifyContent: "flex-end"}}>
