@@ -189,7 +189,6 @@ const DefaultArrayItem = (props: any) => {
 };
 
 const DefaultFixedArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
-  console.log(props);
   return (
     <fieldset className={props.className}>
       <ArrayFieldTitle
