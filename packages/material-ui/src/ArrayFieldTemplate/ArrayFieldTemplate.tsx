@@ -118,33 +118,9 @@ const DefaultArrayItem = (props: any) => {
       </Grid>
 
       {props.hasToolbar && (
-        <Grid item={true}>
-          {(props.hasMoveUp || props.hasMoveDown) && (
-            <>
-              <IconButton
-                icon="arrow-up"
-                className="array-item-move-up"
-                aria-label={intl.formatMessage({defaultMessage: 'Move up'})}
-                //tabIndex={-1}
-                style={btnStyle as any}
-                iconProps={{ fontSize: 'small' }}
-                disabled={props.disabled || props.readonly || !props.hasMoveUp}
-                onClick={props.onReorderClick(props.index, props.index - 1)}
-              />
-              <IconButton
-                icon="arrow-down"
-                aria-label={intl.formatMessage({defaultMessage: 'Move down'})}
-                //tabIndex={-1}
-                style={btnStyle as any}
-                iconProps={{ fontSize: 'small' }}
-                disabled={props.disabled || props.readonly || !props.hasMoveDown}
-                onClick={props.onReorderClick(props.index, props.index + 1)}
-              />
-            </>
-          )}
-
-          {(props.hasMoveUp || props.hasMoveDown) && props.extraOptions && (
-            <>
+        <Grid item>
+          <Grid container direction="column">
+            {(props.hasMoveUp || props.hasMoveDown) && props.extraOptions && (
               <IconButton
                 icon="double-arrow-up"
                 className="array-item-move-up"
@@ -155,6 +131,33 @@ const DefaultArrayItem = (props: any) => {
                 disabled={props.disabled || props.readonly || !props.hasMoveUp}
                 onClick={props.onReorderClick(props.index, 0)}
               />
+            )}
+
+            {(props.hasMoveUp || props.hasMoveDown) && (
+              <>
+                <IconButton
+                  icon="arrow-up"
+                  className="array-item-move-up"
+                  aria-label={intl.formatMessage({defaultMessage: 'Move up'})}
+                  //tabIndex={-1}
+                  style={btnStyle as any}
+                  iconProps={{ fontSize: 'small' }}
+                  disabled={props.disabled || props.readonly || !props.hasMoveUp}
+                  onClick={props.onReorderClick(props.index, props.index - 1)}
+                />
+                <IconButton
+                  icon="arrow-down"
+                  aria-label={intl.formatMessage({defaultMessage: 'Move down'})}
+                  //tabIndex={-1}
+                  style={btnStyle as any}
+                  iconProps={{ fontSize: 'small' }}
+                  disabled={props.disabled || props.readonly || !props.hasMoveDown}
+                  onClick={props.onReorderClick(props.index, props.index + 1)}
+                />
+              </>
+            )}
+
+            {(props.hasMoveUp || props.hasMoveDown) && props.extraOptions && (
               <IconButton
                 icon="double-arrow-down"
                 className="array-item-move-up"
@@ -165,20 +168,20 @@ const DefaultArrayItem = (props: any) => {
                 disabled={props.disabled || props.readonly || !props.hasMoveDown}
                 onClick={props.onReorderClick(props.index, props.size - 1)}
               />
-            </>
-          )}
+            )}
 
-          {props.hasRemove && (
-            <IconButton
-              icon="remove"
-              aria-label={intl.formatMessage({defaultMessage: 'Remove item'})}
-              //tabIndex={-1}
-              style={btnStyle as any}
-              iconProps={{ fontSize: 'small' }}
-              disabled={props.disabled || props.readonly}
-              onClick={props.onDropIndexClick(props.index)}
-            />
-          )}
+            {props.hasRemove && (
+              <IconButton
+                icon="remove"
+                aria-label={intl.formatMessage({defaultMessage: 'Remove item'})}
+                //tabIndex={-1}
+                style={btnStyle as any}
+                iconProps={{ fontSize: 'small' }}
+                disabled={props.disabled || props.readonly}
+                onClick={props.onDropIndexClick(props.index)}
+              />
+            )}
+          </Grid>
         </Grid>
       )}
     </Grid>
