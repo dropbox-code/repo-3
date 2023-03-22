@@ -347,6 +347,8 @@ export default function validateFormData(
 
   let validationError = null;
   try {
+    console.log(anyOfSchema);
+    console.log(formData);
     ajv.validate(anyOfSchema, formData);
   } catch (err) {
     validationError = err;
@@ -356,6 +358,8 @@ export default function validateFormData(
 
   let errors = addAnyOfAdditionalParams(ajv.errors);
   errors = transformAjvErrors(errors);
+  console.log(validationError);
+  console.log(errors);
   // Clear errors to prevent persistent errors, see #1104
 
   ajv.errors = null;
