@@ -155,8 +155,11 @@ class Form extends Component {
   ) {
     const { validate, transformErrors } = this.props;
     const { rootSchema } = this.getRegistry();
-    const resolvedSchema = retrieveSchema(schema, rootSchema, formData);
-    console.log(resolvedSchema);
+    const resolvedSchema = retrieveSchema(
+      { ...schema, title: undefined },
+      rootSchema,
+      formData
+    );
     return validateFormData(
       formData,
       resolvedSchema,
