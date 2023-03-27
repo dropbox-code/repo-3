@@ -5,6 +5,8 @@ import Add from "@material-ui/icons/Add";
 import ArrowUpward from "@material-ui/icons/ArrowUpward";
 import ArrowDownward from "@material-ui/icons/ArrowDownward";
 import DeleteForever from '@material-ui/icons/DeleteForever';
+import VerticalAlignTop from '@material-ui/icons/VerticalAlignTop';
+import VerticalAlignBottom from '@material-ui/icons/VerticalAlignBottom';
 import { IconButtonProps as MuiIconButtonProps } from "@material-ui/core/IconButton";
 
 const mappings: any = {
@@ -12,6 +14,8 @@ const mappings: any = {
   plus: Add,
   "arrow-up": ArrowUpward,
   "arrow-down": ArrowDownward,
+  "double-arrow-up": VerticalAlignTop,
+  "double-arrow-down": VerticalAlignBottom
 };
 
 type IconButtonProps = MuiIconButtonProps & {
