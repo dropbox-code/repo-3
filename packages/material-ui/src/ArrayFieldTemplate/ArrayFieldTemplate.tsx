@@ -103,21 +103,20 @@ const DefaultArrayItem = (props: any) => {
   };
   const intl = useIntl();
   return (
-    <>
-      {props.extraOptions && (
-        <Grid container style={{justifyContent: "flex-end"}}>
-          <Grid item={true}>
-            <Box mb={2}>
-              <AddButton
-                className="array-item-add"
-                onClick={props.onAddIndexClick(props.index)}
-                disabled={props.disabled || props.readonly}
-              />
-            </Box>
-          </Grid>
-        </Grid>
-      )}
       <Grid container={true} key={props.key} alignItems="center">
+        {props.extraOptions && (
+          <Grid container style={{justifyContent: "flex-end"}}>
+            <Grid item={true}>
+              <Box mb={2}>
+                <AddButton
+                  className="array-item-add"
+                  onClick={props.onAddIndexClick(props.index)}
+                  disabled={props.disabled || props.readonly}
+                />
+              </Box>
+            </Grid>
+          </Grid>
+        )}
         <Grid
           item={true}
           xs
@@ -199,7 +198,6 @@ const DefaultArrayItem = (props: any) => {
           </Grid>
         )}
       </Grid>
-    </>
   );
 };
 
