@@ -74,6 +74,13 @@ const FieldTemplate = ({
 
   const { type } = schema;
 
+  const dateRange = (schema: any) => {
+    if(schema.properties.start) {
+      return true
+    } else {
+      return false
+    }
+  }
   const displayLabel = (uiSchema: any) => {
     if(uiSchema['ui:options'].element.description) {
       return true
@@ -121,11 +128,11 @@ const FieldTemplate = ({
               {rawDescription}
             </Typography>
           ) : null}
-          {rawErrors.length > 0 && type === 'object' && (
+          {rawErrors.length > 0 && type === 'object' && !dateRange(schema) && (
             <ErrorList id={id} errors={rawErrors} />
           )}
           {children}
-          {rawErrors.length > 0 && type !== 'object' && (
+          {rawErrors.length > 0 && (type !== 'object' || dateRange(schema)) && (
             <ErrorList id={id} errors={rawErrors} />
           )}
           {rawHelp && (

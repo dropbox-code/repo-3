@@ -323,8 +323,7 @@ function SchemaFieldRender(props) {
     uiSchema["ui:description"] ||
     props.schema.description ||
     schema.description;
-  const errors =
-    uiSchema["ui:options"]?.element?.type === "dateRange" ? [] : __errors;
+  const errors = __errors;
   const help = uiSchema["ui:help"];
   const hidden = uiSchema["ui:widget"] === "hidden";
   const classNames = [
