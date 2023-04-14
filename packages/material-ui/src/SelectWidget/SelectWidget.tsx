@@ -58,12 +58,19 @@ const processValue = (schema: any, value: any) => {
   return value;
 };
 
-const getScore = (choices: {enumNames: string, enum?: string, meta?: {score: number}}[], value: string) => {
-  let choice = choices.find(choice => choice.enum === value);
-  if (!choice) {
-    choice = choices[Number(value)];
+const getScore = (choices: {enumNames: string, enum?: string, meta?: {score: number}}[], value: string | undefined | (string | undefined)[]) => {
+  if (typeof value === 'string') {
+    let choice = choices.find(choice => choice.enum === value);
+    if (!choice) {
+      choice = choices[Number(value)];
+    }
+    return choice && choice.meta ? choice.meta.score : 0;
+  } else if (Array.isArray(value) && value.length > 0) {
+    let choiceString = value.map(item => getScore(choices, item)) as any[];
+    return choiceString.length > 0 ? choiceString.join(', ') : '';
+  } else {
+    return '';
   }
-  return choice && choice.meta ? choice.meta.score : 0;
 }
 
 const SelectWidget = ({
