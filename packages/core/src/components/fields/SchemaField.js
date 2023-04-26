@@ -287,7 +287,10 @@ function SchemaFieldRender(props) {
   const displayLabel = getDisplayLabel(schema, uiSchema, rootSchema);
 
   let { __errors, ...fieldErrorSchema } = errorSchema;
-  if (uiSchema["ui:options"]?.element?.type === "dateRange") {
+  if (
+    uiSchema["ui:options"]?.element?.type === "dateRange" &&
+    (errorSchema?.start || errorSchema?.end)
+  ) {
     __errors = [];
     __errors.push(errorSchema?.start?.__errors[0]);
     __errors.push(errorSchema?.end?.__errors[0]);
