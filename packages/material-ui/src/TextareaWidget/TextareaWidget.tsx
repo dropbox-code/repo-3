@@ -71,6 +71,7 @@ const TextareaWidget = ({
         autoFocus={autofocus}
         multiline={true}
         rows={options.rows || 5}
+        rowsMax={1000}
         error={rawErrors.length > 0}
         onChange={_onChange}
         onBlur={_onBlur}
