@@ -53,7 +53,7 @@ const TextWidget = ({
   const bannedCharacters = options && options.element
     ? (options.element as {bannedCharacters: string}).bannedCharacters
     : undefined;
-
+  const allowedCharacters = schema ? (schema as {allowedCharacters: string}).allowedCharacters : undefined;
   const _onChange = ({
     target: { value },
   }: React.ChangeEvent<HTMLInputElement>) => {
@@ -63,6 +63,14 @@ const TextWidget = ({
       for (const character of bannedCharacters) {
         cleanedValue = cleanedValue.split(character).join('');
       }
+    } else if (typeof cleanedValue === 'string' && allowedCharacters && allowedCharacters.length > 0) {
+      let filteredString = '';
+      for (const character of cleanedValue) {
+        if(allowedCharacters.includes(character)) {
+          filteredString += character;
+        }
+      }
+      cleanedValue = filteredString;
     }
     onChange(cleanedValue ?
       schema.maxLength ? String(cleanedValue).substring(0, Number(schema.maxLength)) : cleanedValue
