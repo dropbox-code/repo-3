@@ -76,10 +76,10 @@ const generateMarks = (min?: number, max?: number, step?: number) => {
     return [];
   }
 
-  const multiplier = calculateMultiplier(min!, max!, step ? step : 1);
+  const multiplier = calculateMultiplier(min!, max!, step ? (step < 1 ? 0.5 : step) : 1);
 
   if (multiplier > 0) {
-    return generateWithMiddleMarks(min!, max!, (step ? step : 1)*multiplier);
+    return generateWithMiddleMarks(min!, max!, (step ? (step < 1 ? 0.5 : step) : 1)*multiplier);
   }
 
   return generateEndpointMarks(min, max);
