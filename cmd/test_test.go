@@ -3,10 +3,13 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
+	"github.com/open-policy-agent/opa/ast"
 	"github.com/open-policy-agent/opa/rego"
 	"github.com/open-policy-agent/opa/topdown"
+	"github.com/open-policy-agent/opa/util/test"
 )
 
 func TestFilterTraceDefault(t *testing.T) {
@@ -135,6 +138,15 @@ func TestFilterTraceExplainFull(t *testing.T) {
 	verifyFilteredTrace(t, p, expected)
 }
 
+func TestThresholdRange(t *testing.T) {
+	thresholds := []float64{-1, 101}
+	for _, threshold := range thresholds {
+		if isThresholdValid(threshold) {
+			t.Fatalf("invalid threshold %2f shoul be reported", threshold)
+		}
+	}
+}
+
 func verifyFilteredTrace(t *testing.T, params *testCommandParams, expected string) {
 	filtered := filterTrace(params, failTrace(t))
 
@@ -197,4 +209,66 @@ func failTrace(t *testing.T) []*topdown.Event {
 	}
 
 	return *tracer
+}
+
+func testSchemasAnnotation(mod string) error {
+	query := "data.test.test_p"
+
+	files := map[string]string{
+		"test.rego": mod,
+	}
+
+	var err error
+	test.WithTempFS(files, func(path string) {
+		_, err = rego.New(
+			rego.Module("test.rego", mod),
+			rego.Trace(true),
+			rego.Query(query),
+		).Eval(context.Background())
+	})
+
+	return err
+}
+
+// Assert that 'schemas' annotations with schema ref are ignored, but not inlined schemas
+func TestSchemasAnnotation(t *testing.T) {
+	policyWithSchemaRef := `
+package test
+# METADATA
+# schemas:
+#   - input: schema["input"]
+p { 
+	rego.metadata.rule() # presence of rego.metadata.* calls must not trigger unwanted schema evaluation 
+	input.foo == 42 # type mismatch with schema that should be ignored
+}
+
+test_p {
+    p with input.foo as 42
+}`
+
+	err := testSchemasAnnotation(policyWithSchemaRef)
+	if err != nil {
+		t.Fatalf("unexpected error when schema ref is present: %v", err)
+	}
+
+	policyWithInlinedSchema := `
+package test
+# METADATA
+# schemas:
+#   - input.foo: {"type": "boolean"}
+p { 
+	rego.metadata.rule() # presence of rego.metadata.* calls must not trigger unwanted schema evaluation 
+	input.foo == 42 # type mismatch with schema that should be ignored
+}
+
+test_p {
+    p with input.foo as 42
+}`
+
+	err = testSchemasAnnotation(policyWithInlinedSchema)
+	if err == nil {
+		t.Fatalf("didn't get expected error when inlined schema is present")
+	} else if !strings.Contains(err.Error(), "rego_type_error: match error") {
+		t.Fatalf("didn't get expected %s error when inlined schema is present; got: %v", ast.TypeErr, err)
+	}
 }

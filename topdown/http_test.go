@@ -13,7 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"math"
 	"net"
 	"net/http"
@@ -28,8 +28,12 @@ import (
 
 	"github.com/open-policy-agent/opa/internal/version"
 	"github.com/open-policy-agent/opa/metrics"
+	"github.com/open-policy-agent/opa/storage"
 	"github.com/open-policy-agent/opa/topdown/builtins"
+	"github.com/open-policy-agent/opa/tracing"
+	"github.com/open-policy-agent/opa/util"
 
+	inmem "github.com/open-policy-agent/opa/storage/inmem/test"
 	iCache "github.com/open-policy-agent/opa/topdown/cache"
 
 	"github.com/open-policy-agent/opa/ast"
@@ -43,7 +47,6 @@ type Person struct {
 
 // TestHTTPGetRequest returns the list of persons
 func TestHTTPGetRequest(t *testing.T) {
-
 	var people []Person
 
 	// test data
@@ -75,10 +78,7 @@ func TestHTTPGetRequest(t *testing.T) {
 		"test-header":    []interface{}{"test-value"},
 	}
 
-	resultObj, err := ast.InterfaceToValue(expectedResult)
-	if err != nil {
-		panic(err)
-	}
+	resultObj := ast.MustInterfaceToValue(expectedResult)
 
 	// run the test
 	tests := []struct {
@@ -101,7 +101,6 @@ func TestHTTPGetRequest(t *testing.T) {
 
 // TestHTTPGetRequest returns the list of persons
 func TestHTTPGetRequestTlsInsecureSkipVerify(t *testing.T) {
-
 	var people []Person
 
 	// test data
@@ -129,28 +128,24 @@ func TestHTTPGetRequestTlsInsecureSkipVerify(t *testing.T) {
 		"content-type":   []interface{}{"text/plain; charset=utf-8"},
 	}
 
-	resultObj, err := ast.InterfaceToValue(expectedResult)
-	if err != nil {
-		panic(err)
+	resultObj := ast.MustInterfaceToValue(expectedResult)
+
+	type httpsStruct struct {
+		note     string
+		rules    []string
+		expected interface{}
 	}
 
 	// run the test
-	tests := []struct {
-		note          string
-		rules         []string
-		expected      interface{}
-		expectedError error
-	}{
-		{note: "http.send", rules: []string{fmt.Sprintf(
-			`p = x { http.send({"method": "get", "url": "%s", "force_json_decode": true}, x) }`, ts.URL)}, expected: &Error{Message: "x509: certificate signed by unknown authority"}},
-		{note: "http.send", rules: []string{fmt.Sprintf(
-			`p = x { http.send({"method": "get", "url": "%s", "force_json_decode": true, "tls_insecure_skip_verify": true}, resp); x := clean_headers(resp) }`, ts.URL)}, expected: resultObj.String()},
-		// This case verifies that `tls_insecure_skip_verify`
-		// is still applied, even if other TLS settings are
-		// present.
-		{note: "http.send", rules: []string{fmt.Sprintf(
-			`p = x { http.send({"method": "get", "url": "%s", "force_json_decode": true, "tls_insecure_skip_verify": true, "tls_use_system_certs": true,}, resp); x := clean_headers(resp) }`, ts.URL)}, expected: resultObj.String()},
-	}
+	tests := []httpsStruct{}
+	tests = append(tests, httpsStruct{note: "http.send", rules: []string{fmt.Sprintf(
+		`p = x { http.send({"method": "get", "url": "%s", "force_json_decode": true, "tls_insecure_skip_verify": true}, resp); x := clean_headers(resp) }`, ts.URL)}, expected: resultObj.String()})
+
+	// This case verifies that `tls_insecure_skip_verify`
+	// is still applied, even if other TLS settings are
+	// present.
+	tests = append(tests, httpsStruct{note: "http.send", rules: []string{fmt.Sprintf(
+		`p = x { http.send({"method": "get", "url": "%s", "force_json_decode": true, "tls_insecure_skip_verify": true, "tls_use_system_certs": true,}, resp); x := clean_headers(resp) }`, ts.URL)}, expected: resultObj.String()})
 
 	data := loadSmallTestData()
 
@@ -159,51 +154,147 @@ func TestHTTPGetRequestTlsInsecureSkipVerify(t *testing.T) {
 	}
 }
 
-func TestHTTPEnableJSONDecode(t *testing.T) {
-
-	// test server
+func TestHTTPEnableJSONOrYAMLDecode(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body := "*Hello World®"
-		fmt.Fprint(w, body)
+		switch r.URL.Path {
+		case "/json-no-header":
+			fmt.Fprintf(w, `{"foo":"bar"}`)
+		case "/yaml-no-header":
+			fmt.Fprintf(w, `foo: bar`)
+		case "/json":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{"foo":"bar"}`)
+		case "/yaml":
+			w.Header().Set("Content-Type", "application/yaml")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `foo: bar`)
+		case "/x-yaml":
+			w.Header().Set("Content-Type", "application/x-yaml")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `foo: bar`)
+		case "/text-no-header":
+			fmt.Fprintf(w, "*Hello World®")
+		}
 	}))
 
 	defer ts.Close()
 
-	// expected result
-	expectedResult := make(map[string]interface{})
-	expectedResult["status"] = "200 OK"
-	expectedResult["status_code"] = http.StatusOK
-	expectedResult["body"] = nil
-	expectedResult["raw_body"] = "*Hello World®"
-	expectedResult["headers"] = map[string]interface{}{
-		"content-length": []interface{}{"14"},
-		"content-type":   []interface{}{"text/plain; charset=utf-8"},
+	body := func(b interface{}) func(map[string]interface{}) {
+		return func(x map[string]interface{}) {
+			x["body"] = b
+		}
+	}
+	rawBody := func(b interface{}) func(map[string]interface{}) {
+		return func(x map[string]interface{}) {
+			x["raw_body"] = b
+		}
 	}
 
-	resultObj, err := ast.InterfaceToValue(expectedResult)
-	if err != nil {
-		panic(err)
+	headers := func(xs ...string) func(map[string]interface{}) {
+		hdrs := map[string]interface{}{}
+		for i := 0; i < len(xs)/2; i++ {
+			hdrs[xs[2*i]] = []interface{}{xs[2*i+1]}
+		}
+		return func(x map[string]interface{}) {
+			x["headers"] = hdrs
+		}
 	}
 
-	// run the test
+	ok := func(and ...func(map[string]interface{})) ast.Value {
+		o := map[string]interface{}{
+			"status":      "200 OK",
+			"status_code": http.StatusOK,
+		}
+		for _, a := range and {
+			a(o)
+		}
+		return ast.MustInterfaceToValue(o)
+	}
+
+	resultObjText := ok(
+		body(nil),
+		rawBody("*Hello World®"),
+		headers("content-length", "14", "content-type", "text/plain; charset=utf-8"),
+	)
+
 	tests := []struct {
 		note     string
-		rules    []string
-		expected interface{}
+		rule     string
+		expected ast.Value
 	}{
-		{"http.send", []string{fmt.Sprintf(
-			`p = x { http.send({"method": "get", "url": "%s", "force_json_decode": true}, resp); x := clean_headers(resp) }`, ts.URL)}, resultObj.String()},
+		{
+			note:     "text response, force json",
+			rule:     fmt.Sprintf(`p = x { http.send({"method": "get", "url": "%s/text-no-header", "force_json_decode": true}, resp); x := clean_headers(resp) }`, ts.URL),
+			expected: resultObjText,
+		},
+		{
+			note:     "text response, force yaml",
+			rule:     fmt.Sprintf(`p = x { http.send({"method": "get", "url": "%s/text-no-header", "force_yaml_decode": true}, resp); x := clean_headers(resp) }`, ts.URL),
+			expected: resultObjText,
+		},
+		{
+			note: "json response, proper header",
+			rule: fmt.Sprintf(`p = x { http.send({"method": "get", "url": "%s/json"}, resp); x := clean_headers(resp) }`, ts.URL),
+			expected: ok(
+				body(map[string]interface{}{"foo": "bar"}),
+				rawBody(`{"foo":"bar"}`),
+				headers("content-length", "13", "content-type", "application/json"),
+			),
+		},
+		{
+			note: "yaml response, proper header",
+			rule: fmt.Sprintf(`p = x { http.send({"method": "get", "url": "%s/yaml"}, resp); x := clean_headers(resp) }`, ts.URL),
+			expected: ok(
+				body(map[string]interface{}{"foo": "bar"}),
+				rawBody(`foo: bar`),
+				headers("content-length", "8", "content-type", "application/yaml"),
+			),
+		},
+		{
+			note: "yaml response, x-yaml header",
+			rule: fmt.Sprintf(`p = x { http.send({"method": "get", "url": "%s/x-yaml"}, resp); x := clean_headers(resp) }`, ts.URL),
+			expected: ok(
+				body(map[string]interface{}{"foo": "bar"}),
+				rawBody(`foo: bar`),
+				headers("content-length", "8", "content-type", "application/x-yaml"),
+			),
+		},
+		{
+			note: "json response, no header",
+			rule: fmt.Sprintf(`p = x { http.send({"method": "get", "url": "%s/json-no-header", "force_json_decode": true}, resp); x := clean_headers(resp) }`, ts.URL),
+			expected: ok(
+				body(map[string]interface{}{"foo": "bar"}),
+				rawBody(`{"foo":"bar"}`),
+				headers("content-length", "13", "content-type", "text/plain; charset=utf-8"),
+			),
+		},
+		{
+			note: "yaml response, no header",
+			rule: fmt.Sprintf(`p = x { http.send({"method": "get", "url": "%s/yaml-no-header", "force_yaml_decode": true}, resp); x := clean_headers(resp) }`, ts.URL),
+			expected: ok(
+				body(map[string]interface{}{"foo": "bar"}),
+				rawBody(`foo: bar`),
+				headers("content-length", "8", "content-type", "text/plain; charset=utf-8"),
+			),
+		},
+		{
+			note: "json response, no header, yaml decode",
+			rule: fmt.Sprintf(`p = x { http.send({"method": "get", "url": "%s/json-no-header", "force_yaml_decode": true}, resp); x := clean_headers(resp) }`, ts.URL),
+			expected: ok(
+				body(map[string]interface{}{"foo": "bar"}),
+				rawBody(`{"foo":"bar"}`),
+				headers("content-length", "13", "content-type", "text/plain; charset=utf-8"),
+			),
+		},
 	}
 
-	data := loadSmallTestData()
-
 	for _, tc := range tests {
-		runTopDownTestCase(t, data, tc.note, append(tc.rules, httpSendHelperRules...), tc.expected)
+		runTopDownTestCase(t, map[string]interface{}{}, tc.note, append([]string{tc.rule}, httpSendHelperRules...), tc.expected.String())
 	}
 }
 
 func echoCustomHeaders(w http.ResponseWriter, r *http.Request) {
-
 	headers := make(map[string][]string)
 	w.Header().Set("Content-Type", "application/json")
 	for k, v := range r.Header {
@@ -216,7 +307,6 @@ func echoCustomHeaders(w http.ResponseWriter, r *http.Request) {
 
 // TestHTTPSendCustomRequestHeaders adds custom headers to request
 func TestHTTPSendCustomRequestHeaders(t *testing.T) {
-
 	// test server
 	ts := httptest.NewServer(http.HandlerFunc(echoCustomHeaders))
 	defer ts.Close()
@@ -269,7 +359,6 @@ func TestHTTPSendCustomRequestHeaders(t *testing.T) {
 
 // TestHTTPHostHeader tests Host header support
 func TestHTTPHostHeader(t *testing.T) {
-
 	// test server
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -307,12 +396,10 @@ func TestHTTPHostHeader(t *testing.T) {
 
 // TestHTTPPostRequest adds a new person
 func TestHTTPPostRequest(t *testing.T) {
-
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-
 		contentType := r.Header.Get("Content-Type")
 
-		bs, err := ioutil.ReadAll(r.Body)
+		bs, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -333,7 +420,6 @@ func TestHTTPPostRequest(t *testing.T) {
 		respHeaders string
 		expected    interface{}
 	}{
-
 		{
 			note: "basic",
 			params: `{
@@ -410,7 +496,6 @@ func TestHTTPPostRequest(t *testing.T) {
 }
 
 func TestHTTPDeleteRequest(t *testing.T) {
-
 	var people []Person
 
 	// test data
@@ -419,7 +504,6 @@ func TestHTTPDeleteRequest(t *testing.T) {
 
 	// test server
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-
 		var person Person
 		if r.Body == nil {
 			http.Error(w, "Please send a request body", 400)
@@ -461,10 +545,7 @@ func TestHTTPDeleteRequest(t *testing.T) {
 		"content-type":   []interface{}{"application/json"},
 	}
 
-	resultObj, err := ast.InterfaceToValue(expectedResult)
-	if err != nil {
-		panic(err)
-	}
+	resultObj := ast.MustInterfaceToValue(expectedResult)
 
 	// delete a new person
 	personToDelete := Person{ID: "2", Firstname: "Joe"}
@@ -491,7 +572,6 @@ func TestHTTPDeleteRequest(t *testing.T) {
 // TestInvalidKeyError returns an error when an invalid key is passed in the
 // http.send builtin
 func TestInvalidKeyError(t *testing.T) {
-
 	// run the test
 	tests := []struct {
 		note     string
@@ -500,6 +580,25 @@ func TestInvalidKeyError(t *testing.T) {
 	}{
 		{"invalid keys", []string{`p = x { http.send({"method": "get", "url": "http://127.0.0.1:51113", "bad_key": "bad_value"}, x) }`}, &Error{Code: TypeErr, Message: `invalid request parameters(s): {"bad_key"}`}},
 		{"missing keys", []string{`p = x { http.send({"method": "get"}, x) }`}, &Error{Code: TypeErr, Message: `missing required request parameters(s): {"url"}`}},
+	}
+
+	data := loadSmallTestData()
+
+	for _, tc := range tests {
+		runTopDownTestCase(t, data, tc.note, tc.rules, tc.expected)
+	}
+}
+
+func TestInvalidRetryParam(t *testing.T) {
+	// run the test
+	tests := []struct {
+		note     string
+		rules    []string
+		expected interface{}
+	}{
+		{"invalid retry param", []string{`p = x { http.send({"method": "get", "url": "http://127.0.0.1:51113", "max_retry_attempts": "bad_value"}, x) }`}, &Error{Code: BuiltinErr, Message: `http.send: invalid value "bad_value" for field "max_retry_attempts"`}},
+		{"invalid number", []string{`p = x { http.send({"method": "get", "url": "http://127.0.0.1:51113", "max_retry_attempts": 1.2}, x) }`}, &Error{Code: BuiltinErr, Message: `http.send: invalid value 1.2 for field "max_retry_attempts"`}},
+		{"negative number", []string{`p = x { http.send({"method": "get", "url": "http://127.0.0.1:51113", "max_retry_attempts": -1000}, x) }`}, &Error{Code: BuiltinErr, Message: `http.send: invalid value -1000 for field "max_retry_attempts"`}},
 	}
 
 	data := loadSmallTestData()
@@ -604,7 +703,6 @@ func TestParseTimeout(t *testing.T) {
 
 // TestHTTPRedirectDisable tests redirects are not enabled by default
 func TestHTTPRedirectDisable(t *testing.T) {
-
 	// test server
 	baseURL, teardown := getTestServer()
 	defer teardown()
@@ -621,10 +719,7 @@ func TestHTTPRedirectDisable(t *testing.T) {
 		"location":       []interface{}{"/test"},
 	}
 
-	resultObj, err := ast.InterfaceToValue(expectedResult)
-	if err != nil {
-		panic(err)
-	}
+	resultObj := ast.MustInterfaceToValue(expectedResult)
 
 	data := loadSmallTestData()
 	rules := append(
@@ -634,12 +729,10 @@ func TestHTTPRedirectDisable(t *testing.T) {
 
 	// run the test
 	runTopDownTestCase(t, data, "http.send", rules, resultObj.String())
-
 }
 
 // TestHTTPRedirectEnable tests redirects are enabled
 func TestHTTPRedirectEnable(t *testing.T) {
-
 	// test server
 	baseURL, teardown := getTestServer()
 	defer teardown()
@@ -654,10 +747,7 @@ func TestHTTPRedirectEnable(t *testing.T) {
 		"content-length": []interface{}{"0"},
 	}
 
-	resultObj, err := ast.InterfaceToValue(expectedResult)
-	if err != nil {
-		panic(err)
-	}
+	resultObj := ast.MustInterfaceToValue(expectedResult)
 
 	data := loadSmallTestData()
 	rules := append(
@@ -669,8 +759,73 @@ func TestHTTPRedirectEnable(t *testing.T) {
 	runTopDownTestCase(t, data, "http.send", rules, resultObj.String())
 }
 
-func TestHTTPSendRaiseError(t *testing.T) {
+func TestHTTPRedirectAllowNet(t *testing.T) {
+	// test server
+	baseURL, teardown := getTestServer()
+	defer teardown()
 
+	// host
+	serverURL, err := url.Parse(baseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverHost := strings.Split(serverURL.Host, ":")[0]
+
+	// expected result
+	expectedResult := make(map[string]interface{})
+	expectedResult["status"] = "200 OK"
+	expectedResult["status_code"] = http.StatusOK
+	expectedResult["body"] = nil
+	expectedResult["raw_body"] = ""
+
+	resultObj := ast.MustInterfaceToValue(expectedResult)
+
+	expectedError := &Error{Code: "eval_builtin_error", Message: fmt.Sprintf("http.send: unallowed host: %s", serverHost)}
+
+	rules := []string{fmt.Sprintf(
+		`p = x { http.send({"method": "get", "url": "%s", "enable_redirect": true, "force_json_decode": true}, resp); x := remove_headers(resp) }`, baseURL)}
+
+	// run the test
+	tests := []struct {
+		note     string
+		rules    []string
+		options  func(*Query) *Query
+		expected interface{}
+	}{
+		{
+			"http.send allow_net nil",
+			rules,
+			setAllowNet(nil),
+			resultObj.String(),
+		},
+		{
+			"http.send allow_net match",
+			rules,
+			setAllowNet([]string{serverHost}),
+			resultObj.String(),
+		},
+		{
+			"http.send allow_net empty",
+			rules,
+			setAllowNet([]string{}),
+			expectedError,
+		},
+		{
+			"http.send allow_net no match",
+			rules,
+			setAllowNet([]string{"example.com"}),
+			expectedError,
+		},
+	}
+
+	data := loadSmallTestData()
+
+	for _, tc := range tests {
+		runTopDownTestCase(t, data, tc.note, append(tc.rules, httpSendHelperRules...), tc.expected, tc.options)
+	}
+}
+
+func TestHTTPSendRaiseError(t *testing.T) {
 	// test server
 	baseURL, teardown := getTestServer()
 	defer teardown()
@@ -679,28 +834,19 @@ func TestHTTPSendRaiseError(t *testing.T) {
 	networkErrObj["code"] = HTTPSendNetworkErr
 	networkErrObj["message"] = "Get \"foo://foo.com\": unsupported protocol scheme \"foo\""
 
-	networkErr, err := ast.InterfaceToValue(networkErrObj)
-	if err != nil {
-		panic(err)
-	}
+	networkErr := ast.MustInterfaceToValue(networkErrObj)
 
 	internalErrObj := make(map[string]interface{})
 	internalErrObj["code"] = HTTPSendInternalErr
 	internalErrObj["message"] = fmt.Sprintf(`http.send({"method": "get", "url": "%s", "force_json_decode": true, "raise_error": false, "force_cache": true}): eval_builtin_error: http.send: 'force_cache' set but 'force_cache_duration_seconds' parameter is missing`, baseURL)
 
-	internalErr, err := ast.InterfaceToValue(internalErrObj)
-	if err != nil {
-		panic(err)
-	}
+	internalErr := ast.MustInterfaceToValue(internalErrObj)
 
 	responseObj := make(map[string]interface{})
 	responseObj["status_code"] = 0
 	responseObj["error"] = internalErrObj
 
-	response, err := ast.InterfaceToValue(responseObj)
-	if err != nil {
-		panic(err)
-	}
+	response := ast.MustInterfaceToValue(responseObj)
 
 	tests := []struct {
 		note         string
@@ -855,7 +1001,6 @@ func TestHTTPSendCaching(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.note, func(t *testing.T) {
-
 			var requests []*http.Request
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requests = append(requests, r)
@@ -879,158 +1024,82 @@ func TestHTTPSendCaching(t *testing.T) {
 	}
 }
 
-func TestHTTPSendInterQueryCaching(t *testing.T) {
+func TestHTTPSendIntraQueryCaching(t *testing.T) {
 	tests := []struct {
-		note             string
-		ruleTemplate     string
-		headers          map[string][]string
-		body             string
-		response         string
-		expectedReqCount int
+		note                       string
+		request                    string
+		ruleTemplate               string
+		headers                    map[string][]string
+		body                       string
+		response                   string
+		expectedReqCount           int
+		expectedInterQueryCacheHit bool
 	}{
 		{
-			note:             "http.send GET single",
-			ruleTemplate:     `p = x { http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}, r); x = r.body }`,
-			headers:          map[string][]string{"Cache-Control": {"max-age=290304000, public"}},
-			response:         `{"x": 1}`,
-			expectedReqCount: 1,
+			note:                       "http.send GET single",
+			request:                    `{"method": "get", "url": "%URL%", "force_json_decode": true}`,
+			ruleTemplate:               `p = x { http.send(%REQ%, r); x = r.body }`,
+			headers:                    map[string][]string{"Cache-Control": {"max-age=290304000, public"}},
+			response:                   `{"x": 1}`,
+			expectedReqCount:           1,
+			expectedInterQueryCacheHit: false,
 		},
 		{
-			note: "http.send GET cache hit (max_age_response_fresh)",
+			note:    "http.send GET multiple",
+			request: `{"method": "get", "url": "%URL%", "force_json_decode": true}`,
 			ruleTemplate: `p = x {
-									r1 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true})
-									r2 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true})  # cached and fresh
-									r3 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true})  # cached and fresh
+									r1 = http.send(%REQ%)
+									r2 = http.send(%REQ%)  # cached
+									r3 = http.send(%REQ%)  # cached
 									r1 == r2
 									r2 == r3
 									x = r1.body
 								}`,
-			headers:          map[string][]string{"Cache-Control": {"max-age=290304000, public"}},
-			response:         `{"x": 1}`,
-			expectedReqCount: 1,
+			headers:                    map[string][]string{"Cache-Control": {"max-age=290304000, public"}},
+			response:                   `{"x": 1}`,
+			expectedReqCount:           1,
+			expectedInterQueryCacheHit: false,
 		},
 		{
-			note: "http.send GET cache hit (expires_header_response_fresh)",
+			note:    "http.send GET multiple (inter-query cache enabled)",
+			request: `{"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}`,
 			ruleTemplate: `p = x {
-									r1 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true})
-									r2 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true})  # cached and fresh
-									r3 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true})  # cached and fresh
+									r1 = http.send(%REQ%)
+									r2 = http.send(%REQ%) # cached; intra-query populated but ignored
+									r3 = http.send(%REQ%) # cached; intra-query populated but ignored
 									r1 == r2
 									r2 == r3
 									x = r1.body
 								}`,
-			headers:          map[string][]string{"Expires": {"Wed, 31 Dec 2115 07:28:00 GMT"}},
-			response:         `{"x": 1}`,
-			expectedReqCount: 1,
+			headers:                    map[string][]string{"Cache-Control": {"max-age=290304000, public"}},
+			response:                   `{"x": 1}`,
+			expectedReqCount:           1,
+			expectedInterQueryCacheHit: true,
 		},
 		{
-			note: "http.send GET (expires_header_invalid_value)",
+			note:    "http.send GET multiple (inter-query cache enabled, )",
+			request: `{"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}`,
 			ruleTemplate: `p = x {
-									r1 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true})
-									r2 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true})  # not cached
-									r3 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true})  # not cached
+									r1 = http.send(%REQ%)
+									r2 = http.send(%REQ%) # cached; intra-query not populated
+									r3 = http.send(%REQ%) # cached; intra-query not populated
 									r1 == r2
 									r2 == r3
 									x = r1.body
 								}`,
-			headers:          map[string][]string{"Expires": {"0"}},
-			response:         `{"x": 1}`,
-			expectedReqCount: 3,
-		},
-		{
-			note: "http.send GET no-store cache",
-			ruleTemplate: `p = x {
-									r1 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true})
-									r2 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true})  # not cached
-									r3 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true})  # not cached
-									r1 == r2
-									r2 == r3
-									x = r1.body
-								}`,
-			headers:          map[string][]string{"Cache-Control": {"no-store"}},
-			response:         `{"x": 1}`,
-			expectedReqCount: 3,
-		},
-		{
-			note: "http.send GET (response_stale_revalidate_with_etag)",
-			ruleTemplate: `p = x {
-									r1 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true})
-									r2 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}) # stale
-									r3 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}) # stale
-									r1 == r2
-									r2 == r3
-									x = r1.body
-								}`,
-			headers:          map[string][]string{"Cache-Control": {"max-age=0, public"}, "Etag": {"1234"}},
-			response:         `{"x": 1}`,
-			expectedReqCount: 3,
-		},
-		{
-			note: "http.send GET (response_stale_revalidate_with_last_modified)",
-			ruleTemplate: `p = x {
-									r1 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true})
-									r2 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}) # stale
-									r3 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}) # stale
-									r1 == r2
-									r2 == r3
-									x = r1.body
-								}`,
-			headers:          map[string][]string{"Cache-Control": {"max-age=0, public"}, "Last-Modified": {"Wed, 31 Dec 2115 07:28:00 GMT"}},
-			response:         `{"x": 1}`,
-			expectedReqCount: 3,
-		},
-		{
-			note: "http.send GET (response_age_negative_duration)",
-			ruleTemplate: `p = x {
-									r1 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true})
-									r2 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}) # stale
-									r3 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}) # stale
-									r1 == r2
-									r2 == r3
-									x = r1.body
-								}`,
-			headers:          map[string][]string{"Cache-Control": {"max-age=0, public"}, "Last-Modified": {"Wed, 31 Dec 2115 07:28:00 GMT"}, "Date": {"Wed, 31 Dec 2115 07:28:00 GMT"}},
-			response:         `{"x": 1}`,
-			expectedReqCount: 3,
-		},
-		{
-			note: "http.send GET cache hit deserialized mode (max_age_response_fresh)",
-			ruleTemplate: `p = x {
-									r1 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true, "caching_mode": "deserialized"})
-									r2 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true, "caching_mode": "deserialized"})  # cached and fresh
-									r3 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true, "caching_mode": "deserialized"})  # cached and fresh
-									r1 == r2
-									r2 == r3
-									x = r1.body
-								}`,
-			headers:          map[string][]string{"Cache-Control": {"max-age=290304000, public"}},
-			response:         `{"x": 1}`,
-			expectedReqCount: 1,
-		},
-		{
-			note: "http.send GET cache hit serialized mode explicit (max_age_response_fresh)",
-			ruleTemplate: `p = x {
-									r1 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true, "caching_mode": "serialized"})
-									r2 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true, "caching_mode": "serialized"})  # cached and fresh
-									r3 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true, "caching_mode": "serialized"})  # cached and fresh
-									r1 == r2
-									r2 == r3
-									x = r1.body
-								}`,
-			headers:          map[string][]string{"Cache-Control": {"max-age=290304000, public"}},
-			response:         `{"x": 1}`,
-			expectedReqCount: 1,
+			headers:                    map[string][]string{"Cache-Control": {"no-store"}},
+			response:                   `{"x": 1}`,
+			expectedReqCount:           1,
+			expectedInterQueryCacheHit: false,
 		},
 	}
 
 	data := loadSmallTestData()
 
 	t0 := time.Now()
-	opts := setTime(t0)
 
 	for _, tc := range tests {
 		t.Run(tc.note, func(t *testing.T) {
-
 			var requests []*http.Request
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requests = append(requests, r)
@@ -1060,11 +1129,175 @@ func TestHTTPSendInterQueryCaching(t *testing.T) {
 			}))
 			defer ts.Close()
 
-			runTopDownTestCase(t, data, tc.note, []string{strings.ReplaceAll(tc.ruleTemplate, "%URL%", ts.URL)}, tc.response, opts)
+			config, _ := iCache.ParseCachingConfig(nil)
+			interQueryCache := iCache.NewInterQueryCache(config)
+
+			opts := []func(*Query) *Query{
+				setTime(t0),
+				setInterQueryCache(interQueryCache),
+			}
+
+			request := strings.ReplaceAll(tc.request, "%URL%", ts.URL)
+			rule := strings.ReplaceAll(tc.ruleTemplate, "%REQ%", request)
+			runTopDownTestCase(t, data, tc.note, []string{rule}, tc.response, opts...)
 
 			// Note: The runTopDownTestCase ends up evaluating twice (once with and once without partial
 			// eval first), so expect 2x the total request count the test case specified.
 			actualCount := len(requests) / 2
+			if actualCount != tc.expectedReqCount {
+				t.Fatalf("Expected to get %d requests, got %d", tc.expectedReqCount, actualCount)
+			}
+
+			var x interface{}
+			if err := util.UnmarshalJSON([]byte(request), &x); err != nil {
+				t.Fatalf("failed to unmarshal request: %v", err)
+			}
+			cacheKey, err := ast.InterfaceToValue(x)
+			if err != nil {
+				t.Fatalf("failed create request object: %v", err)
+			}
+
+			if _, found := interQueryCache.Get(cacheKey); found != tc.expectedInterQueryCacheHit {
+				t.Fatalf("Expected inter-query cache hit: %v, got: %v", tc.expectedInterQueryCacheHit, found)
+			}
+		})
+	}
+}
+
+func TestHTTPSendInterQueryCaching(t *testing.T) {
+	tests := []struct {
+		note             string
+		query            string // each query is run three times
+		headers          map[string][]string
+		body             string
+		response         string
+		expectedReqCount int
+	}{
+		{
+			note:             "http.send GET cache hit (max_age_response_fresh)",
+			query:            `http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}, x)`,
+			headers:          map[string][]string{"Cache-Control": {"max-age=290304000, public"}},
+			response:         `{"x": 1}`,
+			expectedReqCount: 1,
+		},
+		{
+			note:             "http.send GET cache hit (expires_header_response_fresh)",
+			query:            `http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}, x)`,
+			headers:          map[string][]string{"Expires": {"Wed, 31 Dec 2115 07:28:00 GMT"}},
+			response:         `{"x": 1}`,
+			expectedReqCount: 1,
+		},
+		{
+			note:             "http.send GET (expires_header_invalid_value)",
+			query:            `http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}, x)`,
+			headers:          map[string][]string{"Expires": {"0"}},
+			response:         `{"x": 1}`,
+			expectedReqCount: 3,
+		},
+		{
+			note:             "http.send GET no-store cache",
+			query:            `http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}, x)`,
+			headers:          map[string][]string{"Cache-Control": {"no-store"}},
+			response:         `{"x": 1}`,
+			expectedReqCount: 3,
+		},
+		{
+			note:             "http.send GET (response_stale_revalidate_with_etag)",
+			query:            `http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}, x)`,
+			headers:          map[string][]string{"Cache-Control": {"max-age=0, public"}, "Etag": {"1234"}},
+			response:         `{"x": 1}`,
+			expectedReqCount: 3,
+		},
+		{
+			note:             "http.send GET (response_stale_revalidate_with_last_modified)",
+			query:            `http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}, x)`,
+			headers:          map[string][]string{"Cache-Control": {"max-age=0, public"}, "Last-Modified": {"Wed, 31 Dec 2115 07:28:00 GMT"}},
+			response:         `{"x": 1}`,
+			expectedReqCount: 3,
+		},
+		{
+			note:             "http.send GET (response_age_negative_duration)",
+			query:            `http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}, x)`,
+			headers:          map[string][]string{"Cache-Control": {"max-age=0, public"}, "Last-Modified": {"Wed, 31 Dec 2115 07:28:00 GMT"}, "Date": {"Wed, 31 Dec 2115 07:28:00 GMT"}},
+			response:         `{"x": 1}`,
+			expectedReqCount: 3,
+		},
+		{
+			note:             "http.send GET cache hit deserialized mode (max_age_response_fresh)",
+			query:            `http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true, "caching_mode": "deserialized"}, x)`,
+			headers:          map[string][]string{"Cache-Control": {"max-age=290304000, public"}},
+			response:         `{"x": 1}`,
+			expectedReqCount: 1,
+		},
+		{
+			note:             "http.send GET cache hit serialized mode explicit (max_age_response_fresh)",
+			query:            `http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true, "caching_mode": "serialized"}, x)`,
+			headers:          map[string][]string{"Cache-Control": {"max-age=290304000, public"}},
+			response:         `{"x": 1}`,
+			expectedReqCount: 1,
+		},
+		{
+			note:  "http.send GET cache hit serialized mode explicit (max_age_response_fresh), when parsing a yaml response",
+			query: `http.send({"method": "get", "url": "%URL%", "cache": true, "caching_mode": "serialized"}, x)`,
+			headers: map[string][]string{
+				"Cache-Control": {"max-age=290304000, public"},
+				"Content-Type":  {"application/yaml"},
+			},
+			// NOTE: fed into runTopDownTestCase, so it has to be JSON; but we're making use of YAML being a superset of JSON
+			response:         `{"x": 1}`,
+			expectedReqCount: 1,
+		},
+	}
+
+	t0 := time.Now()
+
+	for _, tc := range tests {
+		t.Run(tc.note, func(t *testing.T) {
+			var requests []*http.Request
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests = append(requests, r)
+				headers := w.Header()
+
+				for k, v := range tc.headers {
+					headers[k] = v
+				}
+
+				headers.Set("Date", t0.Format(time.RFC850))
+
+				etag := w.Header().Get("etag")
+				lm := w.Header().Get("last-modified")
+
+				if etag != "" {
+					if r.Header.Get("if-none-match") == etag {
+						w.WriteHeader(http.StatusNotModified)
+					}
+				} else if lm != "" {
+					if r.Header.Get("if-modified-since") == lm {
+						w.WriteHeader(http.StatusNotModified)
+					}
+				} else {
+					w.WriteHeader(http.StatusOK)
+				}
+				_, _ = w.Write([]byte(tc.response)) // ignore error
+			}))
+			defer ts.Close()
+
+			qStr := strings.ReplaceAll(tc.query, "%URL%", ts.URL)
+			q := newQuery(qStr, t0)
+
+			for i := 0; i < 3; i++ {
+				res, err := q.Run(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				resResponse := res[0]["x"].Value.(ast.Object).Get(ast.StringTerm("raw_body"))
+				if ast.String(tc.response).Compare(resResponse.Value) != 0 {
+					t.Fatalf("Expected response on query %d to be %v, got %v", i, tc.response, resResponse.String())
+				}
+			}
+
+			actualCount := len(requests)
 			if actualCount != tc.expectedReqCount {
 				t.Fatalf("Expected to get %d requests, got %d", tc.expectedReqCount, actualCount)
 			}
@@ -1075,6 +1308,7 @@ func TestHTTPSendInterQueryCaching(t *testing.T) {
 func TestHTTPSendInterQueryForceCaching(t *testing.T) {
 	tests := []struct {
 		note             string
+		query            string
 		ruleTemplate     string
 		headers          map[string][]string
 		body             string
@@ -1082,7 +1316,8 @@ func TestHTTPSendInterQueryForceCaching(t *testing.T) {
 		expectedReqCount int
 	}{
 		{
-			note: "http.send GET cache hit (force_cache_only)",
+			note:  "http.send GET cache hit (force_cache_only)",
+			query: `http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "force_cache": true, "force_cache_duration_seconds": 300}, x)`,
 			ruleTemplate: `p = x {
 									r1 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "force_cache": true, "force_cache_duration_seconds": 300})
 									r2 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "force_cache": true, "force_cache_duration_seconds": 300})  # cached and fresh
@@ -1096,7 +1331,23 @@ func TestHTTPSendInterQueryForceCaching(t *testing.T) {
 			expectedReqCount: 1,
 		},
 		{
-			note: "http.send GET cache hit (cache_param_override)",
+			note:  "http.send GET cache hit, empty headers (force_cache_only)",
+			query: `http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "force_cache": true, "force_cache_duration_seconds": 300}, x)`,
+			ruleTemplate: `p = x {
+									r1 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "force_cache": true, "force_cache_duration_seconds": 300})
+									r2 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "force_cache": true, "force_cache_duration_seconds": 300})  # cached and fresh
+									r3 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "force_cache": true, "force_cache_duration_seconds": 300})  # cached and fresh
+									r1 == r2
+									r2 == r3
+									x = r1.body
+								}`,
+			headers:          map[string][]string{},
+			response:         `{"x": 1}`,
+			expectedReqCount: 1,
+		},
+		{
+			note:  "http.send GET cache hit (cache_param_override)",
+			query: `http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true, "force_cache": true, "force_cache_duration_seconds": 300}, x)`,
 			ruleTemplate: `p = x {
 									r1 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true, "force_cache": true, "force_cache_duration_seconds": 300})
 									r2 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true, "force_cache": true, "force_cache_duration_seconds": 300})  # cached and fresh
@@ -1110,7 +1361,8 @@ func TestHTTPSendInterQueryForceCaching(t *testing.T) {
 			expectedReqCount: 1,
 		},
 		{
-			note: "http.send GET cache hit (force_cache_only_no_store_override)",
+			note:  "http.send GET cache hit (force_cache_only_no_store_override)",
+			query: `http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "force_cache": true, "force_cache_duration_seconds": 300}, x)`,
 			ruleTemplate: `p = x {
 									r1 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "force_cache": true, "force_cache_duration_seconds": 300})
 									r2 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "force_cache": true, "force_cache_duration_seconds": 300})  # cached and fresh
@@ -1127,7 +1379,8 @@ func TestHTTPSendInterQueryForceCaching(t *testing.T) {
 			expectedReqCount: 1,
 		},
 		{
-			note: "http.send GET cache hit (cache_param_override_no_store_override)",
+			note:  "http.send GET cache hit (cache_param_override_no_store_override)",
+			query: `http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true, "force_cache": true, "force_cache_duration_seconds": 300}, x)`,
 			ruleTemplate: `p = x {
 									r1 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true, "force_cache": true, "force_cache_duration_seconds": 300})
 									r2 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true, "force_cache": true, "force_cache_duration_seconds": 300})  # cached and fresh
@@ -1144,7 +1397,8 @@ func TestHTTPSendInterQueryForceCaching(t *testing.T) {
 			expectedReqCount: 1,
 		},
 		{
-			note: "http.send GET cache hit (cache_param_override_no_store_override_invalid_expires_header_value)",
+			note:  "http.send GET cache hit (cache_param_override_no_store_override_invalid_expires_header_value)",
+			query: `http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true, "force_cache": true, "force_cache_duration_seconds": 300}, x)`,
 			ruleTemplate: `p = x {
 									r1 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true, "force_cache": true, "force_cache_duration_seconds": 300})
 									r2 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true, "force_cache": true, "force_cache_duration_seconds": 300})  # cached and fresh
@@ -1162,13 +1416,9 @@ func TestHTTPSendInterQueryForceCaching(t *testing.T) {
 		},
 	}
 
-	data := loadSmallTestData()
-
-	t0 := time.Now()
-	opts := setTime(t0)
-
 	for _, tc := range tests {
 		t.Run(tc.note, func(t *testing.T) {
+			t0 := time.Now().UTC()
 
 			var requests []*http.Request
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1179,7 +1429,7 @@ func TestHTTPSendInterQueryForceCaching(t *testing.T) {
 					headers[k] = v
 				}
 
-				headers.Set("Date", t0.Format(time.RFC850))
+				headers.Set("Date", t0.Format(http.TimeFormat))
 
 				w.WriteHeader(http.StatusOK)
 				_, err := w.Write([]byte(tc.response))
@@ -1189,13 +1439,26 @@ func TestHTTPSendInterQueryForceCaching(t *testing.T) {
 			}))
 			defer ts.Close()
 
-			runTopDownTestCase(t, data, tc.note, []string{strings.ReplaceAll(tc.ruleTemplate, "%URL%", ts.URL)}, tc.response, opts)
+			//runTopDownTestCase(t, data, tc.note, []string{strings.ReplaceAll(tc.ruleTemplate, "%URL%", ts.URL)}, tc.response, opts)
 
-			// Note: The runTopDownTestCase ends up evaluating twice (once with and once without partial
-			// eval first), so expect 2x the total request count the test case specified.
-			actualCount := len(requests) / 2
+			qStr := strings.ReplaceAll(tc.query, "%URL%", ts.URL)
+			q := newQuery(qStr, t0)
+
+			for i := 0; i < 3; i++ {
+				res, err := q.Run(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				resResponse := res[0]["x"].Value.(ast.Object).Get(ast.StringTerm("raw_body"))
+				if ast.String(tc.response).Compare(resResponse.Value) != 0 {
+					t.Fatalf("Expected response on query %d to be %v, got %v", i, tc.response, resResponse.String())
+				}
+			}
+
+			actualCount := len(requests)
 			if actualCount != tc.expectedReqCount {
-				t.Fatalf("Expected to get %d requests, got %d", tc.expectedReqCount, actualCount)
+				t.Errorf("Expected to get %d requests, got %d", tc.expectedReqCount, actualCount)
 			}
 		})
 	}
@@ -1204,59 +1467,38 @@ func TestHTTPSendInterQueryForceCaching(t *testing.T) {
 func TestHTTPSendInterQueryCachingModifiedResp(t *testing.T) {
 	tests := []struct {
 		note             string
-		ruleTemplate     string
+		query            string
 		headers          map[string][]string
 		body             string
 		response         string
 		expectedReqCount int
 	}{
 		{
-			note: "http.send GET (response_stale_revalidate_with_etag)",
-			ruleTemplate: `p = x {
-									r1 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true})
-									r2 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}) # stale
-									r3 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}) # cached and fresh
-									r2 == r3
-									x = r1.body
-								}`,
+			note:             "http.send GET (response_stale_revalidate_with_etag)",
+			query:            `http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}, x)`,
 			headers:          map[string][]string{"Cache-Control": {"max-age=0, public"}, "Etag": {"1234"}, "location": {"/test"}},
 			response:         `{"x": 1}`,
 			expectedReqCount: 2,
 		},
 		{
-			note: "http.send GET cache deserialized mode (response_stale_revalidate_with_etag)",
-			ruleTemplate: `p = x {
-									r1 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true, "caching_mode": "deserialized"})
-									r2 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true, "caching_mode": "deserialized"}) # stale
-									r3 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true, "caching_mode": "deserialized"}) # cached and fresh
-									r2 == r3
-									x = r1.body
-								}`,
+			note:             "http.send GET cache deserialized mode (response_stale_revalidate_with_etag)",
+			query:            `http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true, "caching_mode": "deserialized"}, x)`,
 			headers:          map[string][]string{"Cache-Control": {"max-age=0, public"}, "Etag": {"1234"}, "location": {"/test"}},
 			response:         `{"x": 1}`,
 			expectedReqCount: 2,
 		},
 		{
-			note: "http.send GET (response_stale_revalidate_with_no_etag)",
-			ruleTemplate: `p = x {
-									r1 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true})
-									r2 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}) # stale
-									r1 == r2
-									x = r1.body
-								}`,
+			note:             "http.send GET (response_stale_revalidate_with_no_etag)",
+			query:            `http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}, x)`,
 			headers:          map[string][]string{"Cache-Control": {"max-age=0, public"}},
 			response:         `{"x": 1}`,
-			expectedReqCount: 2,
+			expectedReqCount: 3,
 		},
 	}
 
-	data := loadSmallTestData()
-
-	t0 := time.Now()
-	opts := setTime(t0)
-
 	for _, tc := range tests {
 		t.Run(tc.note, func(t *testing.T) {
+			t0 := time.Now().UTC()
 
 			var requests []*http.Request
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1267,7 +1509,7 @@ func TestHTTPSendInterQueryCachingModifiedResp(t *testing.T) {
 					headers[k] = v
 				}
 
-				headers.Set("Date", t0.Format(time.RFC850))
+				headers.Set("Date", t0.Format(http.TimeFormat))
 
 				etag := w.Header().Get("etag")
 
@@ -1285,11 +1527,24 @@ func TestHTTPSendInterQueryCachingModifiedResp(t *testing.T) {
 			}))
 			defer ts.Close()
 
-			runTopDownTestCase(t, data, tc.note, []string{strings.ReplaceAll(tc.ruleTemplate, "%URL%", ts.URL)}, tc.response, opts)
+			qStr := strings.ReplaceAll(tc.query, "%URL%", ts.URL)
+			q := newQuery(qStr, t0)
+
+			for i := 0; i < 3; i++ {
+				res, err := q.Run(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				resResponse := res[0]["x"].Value.(ast.Object).Get(ast.StringTerm("raw_body"))
+				if ast.String(tc.response).Compare(resResponse.Value) != 0 {
+					t.Fatalf("Expected response on query %d to be %v, got %v", i, tc.response, resResponse.String())
+				}
+			}
 
 			// Note: The runTopDownTestCase ends up evaluating twice (once with and once without partial
 			// eval first), so expect 2x the total request count the test case specified.
-			actualCount := len(requests) / 2
+			actualCount := len(requests)
 			if actualCount != tc.expectedReqCount {
 				t.Fatalf("Expected to get %d requests, got %d", tc.expectedReqCount, actualCount)
 			}
@@ -1300,33 +1555,24 @@ func TestHTTPSendInterQueryCachingModifiedResp(t *testing.T) {
 func TestHTTPSendInterQueryCachingNewResp(t *testing.T) {
 	tests := []struct {
 		note             string
-		ruleTemplate     string
+		query            string // each query will be run three times
 		headers          map[string][]string
 		body             string
 		response         string
 		expectedReqCount int
 	}{
 		{
-			note: "http.send GET (response_stale_revalidate_with_etag)",
-			ruleTemplate: `p = x {
-									r1 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true})
-									r2 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}) # stale
-									r3 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}) # cached and fresh
-									x = r1.body
-								}`,
+			note:             "http.send GET (response_stale_revalidate_with_etag)",
+			query:            `http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}, x)`,
 			headers:          map[string][]string{"Cache-Control": {"max-age=0, public"}, "Etag": {"1234"}, "location": {"/test"}},
 			response:         `{"x": 1}`,
 			expectedReqCount: 2,
 		},
 	}
 
-	data := loadSmallTestData()
-
-	t0 := time.Now()
-	opts := setTime(t0)
-
 	for _, tc := range tests {
 		t.Run(tc.note, func(t *testing.T) {
+			t0 := time.Now().UTC()
 
 			var requests []*http.Request
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1337,7 +1583,7 @@ func TestHTTPSendInterQueryCachingNewResp(t *testing.T) {
 					headers[k] = v
 				}
 
-				headers.Set("Date", t0.Format(time.RFC850))
+				headers.Set("Date", t0.Format(http.TimeFormat))
 
 				etag := w.Header().Get("etag")
 
@@ -1354,11 +1600,22 @@ func TestHTTPSendInterQueryCachingNewResp(t *testing.T) {
 			}))
 			defer ts.Close()
 
-			runTopDownTestCase(t, data, tc.note, []string{strings.ReplaceAll(tc.ruleTemplate, "%URL%", ts.URL)}, tc.response, opts)
+			qStr := strings.ReplaceAll(tc.query, "%URL%", ts.URL)
+			q := newQuery(qStr, t0)
 
-			// Note: The runTopDownTestCase ends up evaluating twice (once with and once without partial
-			// eval first), so expect 2x the total request count the test case specified.
-			actualCount := len(requests) / 2
+			for i := 0; i < 3; i++ {
+				res, err := q.Run(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				resResponse := res[0]["x"].Value.(ast.Object).Get(ast.StringTerm("raw_body"))
+				if ast.String(tc.response).Compare(resResponse.Value) != 0 {
+					t.Fatalf("Expected response on query %d to be %v, got %v", i, tc.response, resResponse.String())
+				}
+			}
+
+			actualCount := len(requests)
 			if actualCount != tc.expectedReqCount {
 				t.Fatalf("Expected to get %d requests, got %d", tc.expectedReqCount, actualCount)
 			}
@@ -1366,46 +1623,50 @@ func TestHTTPSendInterQueryCachingNewResp(t *testing.T) {
 	}
 }
 
+func newQuery(qStr string, t0 time.Time) *Query {
+	config, _ := iCache.ParseCachingConfig(nil)
+	interQueryCache := iCache.NewInterQueryCache(config)
+	ctx := context.Background()
+	store := inmem.New()
+	txn := storage.NewTransactionOrDie(ctx, store)
+	q := NewQuery(ast.MustParseBody(qStr)).
+		WithCompiler(ast.NewCompiler()).
+		WithInterQueryBuiltinCache(interQueryCache).
+		WithStore(store).
+		WithTransaction(txn).
+		WithTime(t0)
+	return q
+}
+
 func TestInsertIntoHTTPSendInterQueryCacheError(t *testing.T) {
 	tests := []struct {
 		note             string
-		ruleTemplate     string
+		query            string
 		headers          map[string][]string
 		body             string
 		response         string
 		expectedReqCount int
 	}{
 		{
-			note: "http.send GET (bad_date_header_value)",
-			ruleTemplate: `p = x {
-									r1 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}) # fallback to normal cache
-									r2 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}) # retrieved from normal cache
-									r1 == r2
-									x = r1.body
-								}`,
+			note:             "http.send GET (bad_date_header_value)",
+			query:            `http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}, x)`,
 			headers:          map[string][]string{"Cache-Control": {"max-age=0, public"}, "Date": {"Wed, 32 Dec 2115 07:28:00 GMT"}},
 			response:         `{"x": 1}`,
-			expectedReqCount: 1,
+			expectedReqCount: 3,
 		},
 		{
-			note: "http.send GET (bad_cache_control_header_value)",
-			ruleTemplate: `p = x {
-									r1 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}) # fallback to normal cache
-									r2 = http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}) # retrieved from normal cache
-									r1 == r2
-									x = r1.body
-								}`,
+			note:             "http.send GET (bad_cache_control_header_value)",
+			query:            `http.send({"method": "get", "url": "%URL%", "force_json_decode": true, "cache": true}, x)`,
 			headers:          map[string][]string{"Cache-Control": {"max-age=\"foo\", public"}},
 			response:         `{"x": 1}`,
-			expectedReqCount: 1,
+			expectedReqCount: 3,
 		},
 	}
 
-	data := loadSmallTestData()
-
 	for _, tc := range tests {
-		t.Run(tc.note, func(t *testing.T) {
+		t0 := time.Now().UTC()
 
+		t.Run(tc.note, func(t *testing.T) {
 			var requests []*http.Request
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requests = append(requests, r)
@@ -1423,11 +1684,22 @@ func TestInsertIntoHTTPSendInterQueryCacheError(t *testing.T) {
 			}))
 			defer ts.Close()
 
-			runTopDownTestCase(t, data, tc.note, []string{strings.ReplaceAll(tc.ruleTemplate, "%URL%", ts.URL)}, tc.response)
+			qStr := strings.ReplaceAll(tc.query, "%URL%", ts.URL)
+			q := newQuery(qStr, t0)
 
-			// Note: The runTopDownTestCase ends up evaluating twice (once with and once without partial
-			// eval first), so expect 2x the total request count the test case specified.
-			actualCount := len(requests) / 2
+			for i := 0; i < 3; i++ {
+				res, err := q.Run(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				resResponse := res[0]["x"].Value.(ast.Object).Get(ast.StringTerm("raw_body"))
+				if ast.String(tc.response).Compare(resResponse.Value) != 0 {
+					t.Fatalf("Expected response on query %d to be %v, got %v", i, tc.response, resResponse.String())
+				}
+			}
+
+			actualCount := len(requests)
 			if actualCount != tc.expectedReqCount {
 				t.Fatalf("Expected to get %d requests, got %d", tc.expectedReqCount, actualCount)
 			}
@@ -1477,7 +1749,6 @@ func TestGetCachingMode(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.note, func(t *testing.T) {
-
 			actual, err := getCachingMode(tc.input)
 			if tc.wantError {
 				if err == nil {
@@ -1509,19 +1780,6 @@ func TestGetResponseHeaderDateEmpty(t *testing.T) {
 	expected := "no date header"
 	if err.Error() != expected {
 		t.Fatalf("Expected error message %v but got %v", expected, err.Error())
-	}
-}
-
-func TestIsCachedResponseFreshZeroTime(t *testing.T) {
-	zeroTime := new(time.Time)
-	result := isCachedResponseFresh(BuiltinContext{}, &responseHeaders{date: *zeroTime}, nil)
-	if result {
-		t.Fatal("Expected stale cache response")
-	}
-
-	result = isCachedResponseFresh(BuiltinContext{Time: ast.NullTerm()}, &responseHeaders{date: time.Now()}, nil)
-	if result {
-		t.Fatal("Expected stale cache response")
 	}
 }
 
@@ -1572,7 +1830,6 @@ func TestParseMaxAgeCacheDirective(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.note, func(t *testing.T) {
-
 			actual, err := parseMaxAgeCacheDirective(tc.input)
 			if tc.wantError {
 				if err == nil {
@@ -1591,13 +1848,11 @@ func TestParseMaxAgeCacheDirective(t *testing.T) {
 			if actual != tc.expected {
 				t.Fatalf("Expected value for max-age %v but got %v", tc.expected, actual)
 			}
-
 		})
 	}
 }
 
 func TestNewForceCacheParams(t *testing.T) {
-
 	tests := []struct {
 		note      string
 		input     ast.Object
@@ -1637,7 +1892,6 @@ func TestNewForceCacheParams(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.note, func(t *testing.T) {
-
 			actual, err := newForceCacheParams(tc.input)
 			if tc.wantError {
 				if err == nil {
@@ -1703,7 +1957,6 @@ func TestGetBoolValFromReqObj(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.note, func(t *testing.T) {
-
 			actual, err := getBoolValFromReqObj(tc.input, tc.key)
 			if tc.wantError {
 				if err == nil {
@@ -1722,7 +1975,6 @@ func TestGetBoolValFromReqObj(t *testing.T) {
 			if actual != tc.expected {
 				t.Fatalf("Expected value for key %v is %v but got %v", tc.key, tc.expected, actual)
 			}
-
 		})
 	}
 }
@@ -1743,31 +1995,39 @@ func TestInterQueryCheckCacheError(t *testing.T) {
 }
 
 func TestNewInterQueryCacheValue(t *testing.T) {
+	date := "Wed, 31 Dec 2115 07:28:00 GMT"
+	maxAge := 290304000
+
 	headers := make(http.Header)
 	headers.Set("test-header", "test-value")
-	headers.Set("Cache-Control", "max-age=290304000, public")
-	headers.Set("Date", "Wed, 31 Dec 2115 07:28:00 GMT")
+	headers.Set("Cache-Control", fmt.Sprintf("max-age=%d, public", maxAge))
+	headers.Set("Date", date)
 
 	// test data
-	var b = []byte(`[{"ID": "1", "Firstname": "John"}]`)
+	b := []byte(`[{"ID": "1", "Firstname": "John"}]`)
 
 	response := &http.Response{
 		Status:     "200 OK",
 		StatusCode: http.StatusOK,
 		Header:     headers,
 		Request:    &http.Request{Method: "Get"},
-		Body:       ioutil.NopCloser(bytes.NewBuffer(b)),
+		Body:       io.NopCloser(bytes.NewBuffer(b)),
 	}
 
-	result, err := newInterQueryCacheValue(response, b)
+	result, err := newInterQueryCacheValue(BuiltinContext{}, response, b, &forceCacheParams{})
 	if err != nil {
 		t.Fatalf("Unexpected error %v", err)
 	}
 
-	cvd := interQueryCacheData{RespBody: b,
+	dateTime, _ := http.ParseTime(date)
+
+	cvd := interQueryCacheData{
+		RespBody:   b,
 		Status:     "200 OK",
 		StatusCode: http.StatusOK,
-		Headers:    headers}
+		Headers:    headers,
+		ExpiresAt:  dateTime.Add(time.Duration(maxAge) * time.Second),
+	}
 
 	cvdBytes, err := json.Marshal(cvd)
 	if err != nil {
@@ -1829,7 +2089,6 @@ func getTLSTestServer() (ts *httptest.Server) {
 }
 
 func TestHTTPSClient(t *testing.T) {
-
 	const (
 		localClientCertFile  = "testdata/client-cert.pem"
 		localClientCert2File = "testdata/client-cert-2.pem"
@@ -1839,7 +2098,7 @@ func TestHTTPSClient(t *testing.T) {
 		localServerKeyFile   = "testdata/server-key.pem"
 	)
 
-	caCertPEM, err := ioutil.ReadFile(localCaFile)
+	caCertPEM, err := os.ReadFile(localCaFile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1858,22 +2117,14 @@ func TestHTTPSClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = os.Setenv("CLIENT_CERT_ENV", string(clientCert))
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Setenv("CLIENT_CERT_ENV", string(clientCert))
+
 	clientKey, err := readKeyFromFile(localClientKeyFile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = os.Setenv("CLIENT_KEY_ENV", string(clientKey))
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = os.Setenv("CLIENT_CA_ENV", string(caCertPEM))
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Setenv("CLIENT_KEY_ENV", string(clientKey))
+	t.Setenv("CLIENT_CA_ENV", string(caCertPEM))
 
 	// Replicating some of what happens in the server's HTTPS listener
 	s := getTLSTestServer()
@@ -1930,17 +2181,17 @@ func TestHTTPSClient(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		ca, err := ioutil.ReadFile(localCaFile)
+		ca, err := os.ReadFile(localCaFile)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		cert, err := ioutil.ReadFile(localClientCertFile)
+		cert, err := os.ReadFile(localClientCertFile)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		key, err := ioutil.ReadFile(localClientKeyFile)
+		key, err := os.ReadFile(localClientKeyFile)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2066,8 +2317,7 @@ func TestHTTPSClient(t *testing.T) {
 	})
 
 	t.Run("Negative Test: No Root Ca", func(t *testing.T) {
-
-		expectedResult := &Error{Code: BuiltinErr, Message: "x509: certificate signed by unknown authority", Location: nil}
+		expectedResult := &Error{Code: BuiltinErr, Message: fixupDarwinGo118("x509: certificate signed by unknown authority", `“my-server” certificate is not standards compliant`), Location: nil}
 		data := loadSmallTestData()
 		rule := []string{fmt.Sprintf(
 			`p = x { http.send({"method": "get", "url": "%s", "tls_client_cert_file": "%s", "tls_client_key_file": "%s"}, x) }`, s.URL, localClientCertFile, localClientKeyFile)}
@@ -2077,7 +2327,6 @@ func TestHTTPSClient(t *testing.T) {
 	})
 
 	t.Run("Negative Test: Wrong Cert/Key Pair", func(t *testing.T) {
-
 		expectedResult := &Error{Code: BuiltinErr, Message: "tls: private key does not match public key", Location: nil}
 		data := loadSmallTestData()
 		rule := []string{fmt.Sprintf(
@@ -2088,8 +2337,7 @@ func TestHTTPSClient(t *testing.T) {
 	})
 
 	t.Run("Negative Test: System Certs do not include local rootCA", func(t *testing.T) {
-
-		expectedResult := &Error{Code: BuiltinErr, Message: "x509: certificate signed by unknown authority", Location: nil}
+		expectedResult := &Error{Code: BuiltinErr, Message: fixupDarwinGo118("x509: certificate signed by unknown authority", `“my-server” certificate is not standards compliant`), Location: nil}
 		data := loadSmallTestData()
 		rule := []string{fmt.Sprintf(
 			`p = x { http.send({"method": "get", "url": "%s", "tls_client_cert_file": "%s", "tls_client_key_file": "%s", "tls_use_system_certs": true}, x) }`, s.URL, localClientCertFile, localClientKeyFile)}
@@ -2134,14 +2382,13 @@ func TestHTTPSClient(t *testing.T) {
 }
 
 func TestHTTPSNoClientCerts(t *testing.T) {
-
 	const (
 		localCaFile         = "testdata/ca.pem"
 		localServerCertFile = "testdata/server-cert.pem"
 		localServerKeyFile  = "testdata/server-key.pem"
 	)
 
-	caCertPEM, err := ioutil.ReadFile(localCaFile)
+	caCertPEM, err := os.ReadFile(localCaFile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2155,10 +2402,7 @@ func TestHTTPSNoClientCerts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = os.Setenv("CLIENT_CA_ENV", string(caCertPEM))
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Setenv("CLIENT_CA_ENV", string(caCertPEM))
 
 	// Replicating some of what happens in the server's HTTPS listener
 	s := getTLSTestServer()
@@ -2209,7 +2453,7 @@ func TestHTTPSNoClientCerts(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		ca, err := ioutil.ReadFile(localCaFile)
+		ca, err := os.ReadFile(localCaFile)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2332,8 +2576,7 @@ func TestHTTPSNoClientCerts(t *testing.T) {
 	})
 
 	t.Run("Negative Test: System Certs do not include local rootCA", func(t *testing.T) {
-
-		expectedResult := &Error{Code: BuiltinErr, Message: "x509: certificate signed by unknown authority", Location: nil}
+		expectedResult := &Error{Code: BuiltinErr, Message: fixupDarwinGo118("x509: certificate signed by unknown authority", `“my-server” certificate is not standards compliant`), Location: nil}
 		data := loadSmallTestData()
 		rule := []string{fmt.Sprintf(
 			`p = x { http.send({"method": "get", "url": "%s", "tls_use_system_certs": true}, x) }`, s.URL)}
@@ -2343,13 +2586,24 @@ func TestHTTPSNoClientCerts(t *testing.T) {
 	})
 }
 
+// Note(philipc): In Go 1.18, the crypto/x509 package deprecated the
+// (*CertPool).Subjects() function. The precise reasoning for why this was
+// done traces back to:
+//
+//	https://github.com/golang/go/issues/46287
+//
+// For now, most projects seem to be working around this deprecation by
+// changing how they verify certificates, and when CertPools are needed in
+// tests, some larger projects have just slapped linter ignores on the
+// offending callsites. Since we only use (*CertPool).Subjects() here for
+// tests, we've gone with using linter ignores for now.
 func TestCertSelectionLogic(t *testing.T) {
 	const (
 		localCaFile = "testdata/ca.pem"
 	)
 
 	// Set up Environment
-	caCertPEM, err := ioutil.ReadFile(localCaFile)
+	caCertPEM, err := os.ReadFile(localCaFile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2359,15 +2613,12 @@ func TestCertSelectionLogic(t *testing.T) {
 		t.Fatal("failed to parse CA cert")
 	}
 
-	ca, err := ioutil.ReadFile(localCaFile)
+	ca, err := os.ReadFile(localCaFile)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	err = os.Setenv("CLIENT_CA_ENV", string(caCertPEM))
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Setenv("CLIENT_CA_ENV", string(caCertPEM))
 
 	getClientTLSConfig := func(obj ast.Object) *tls.Config {
 		_, client, err := createHTTPRequest(BuiltinContext{Context: context.Background()}, obj)
@@ -2403,7 +2654,7 @@ func TestCertSelectionLogic(t *testing.T) {
 		{
 			note:     "tls_use_system_certs set to true",
 			input:    map[*ast.Term]*ast.Term{ast.StringTerm("tls_use_system_certs"): ast.BooleanTerm(true)},
-			expected: systemCertsPool.Subjects(),
+			expected: systemCertsPool.Subjects(), // nolint:staticcheck // ignoring the deprecated (*CertPool).Subjects() call here because it's in a test.
 			msg:      "Expected TLS config to use system certs",
 		},
 		{
@@ -2415,25 +2666,25 @@ func TestCertSelectionLogic(t *testing.T) {
 		{
 			note:     "no CAs specified",
 			input:    nil,
-			expected: systemCertsPool.Subjects(),
+			expected: systemCertsPool.Subjects(), // nolint:staticcheck // ignoring the deprecated (*CertPool).Subjects() call here because it's in a test.
 			msg:      "Expected TLS config to use system certs",
 		},
 		{
 			note:     "CA cert provided directly",
 			input:    map[*ast.Term]*ast.Term{ast.StringTerm("tls_ca_cert"): ast.StringTerm(string(ca))},
-			expected: caPool.Subjects(),
+			expected: caPool.Subjects(), // nolint:staticcheck // ignoring the deprecated (*CertPool).Subjects() call here because it's in a test.
 			msg:      "Expected TLS config to use provided CA certs",
 		},
 		{
 			note:     "CA cert file path provided",
 			input:    map[*ast.Term]*ast.Term{ast.StringTerm("tls_ca_cert_file"): ast.StringTerm(localCaFile)},
-			expected: caPool.Subjects(),
+			expected: caPool.Subjects(), // nolint:staticcheck // ignoring the deprecated (*CertPool).Subjects() call here because it's in a test.
 			msg:      "Expected TLS config to use provided CA certs in file",
 		},
 		{
 			note:     "CA cert provided in env variable",
 			input:    map[*ast.Term]*ast.Term{ast.StringTerm("tls_ca_cert_env_variable"): ast.StringTerm("CLIENT_CA_ENV")},
-			expected: caPool.Subjects(),
+			expected: caPool.Subjects(), // nolint:staticcheck // ignoring the deprecated (*CertPool).Subjects() call here because it's in a test.
 			msg:      "Expected TLS config to use provided CA certs in env variable",
 		},
 		{
@@ -2442,7 +2693,7 @@ func TestCertSelectionLogic(t *testing.T) {
 				ast.StringTerm("tls_ca_cert"):          ast.StringTerm(string(ca)),
 				ast.StringTerm("tls_use_system_certs"): ast.BooleanTerm(false),
 			},
-			expected: caPool.Subjects(),
+			expected: caPool.Subjects(), // nolint:staticcheck // ignoring the deprecated (*CertPool).Subjects() call here because it's in a test.
 			msg:      "Expected TLS config to use provided CA certs only",
 		},
 		{
@@ -2451,7 +2702,7 @@ func TestCertSelectionLogic(t *testing.T) {
 				ast.StringTerm("tls_ca_cert"):          ast.StringTerm(string(ca)),
 				ast.StringTerm("tls_use_system_certs"): ast.BooleanTerm(true),
 			},
-			expected: systemCertsAndCaPool.Subjects(),
+			expected: systemCertsAndCaPool.Subjects(), // nolint:staticcheck // ignoring the deprecated (*CertPool).Subjects() call here because it's in a test.
 			msg:      "Expected TLS config to use provided CA certs and system certs",
 		},
 	}
@@ -2468,6 +2719,7 @@ func TestCertSelectionLogic(t *testing.T) {
 					t.Fatalf(tc.msg)
 				}
 			} else {
+				// nolint:staticcheck // ignoring the deprecated (*CertPool).Subjects() call here because it's in a test.
 				if !reflect.DeepEqual(tlsConfig.RootCAs.Subjects(), tc.expected) {
 					t.Fatal(tc.msg)
 				}
@@ -2476,8 +2728,320 @@ func TestCertSelectionLogic(t *testing.T) {
 	}
 }
 
-func TestHTTPSendMetrics(t *testing.T) {
+func TestHTTPSendCacheDefaultStatusCodesIntraQueryCache(t *testing.T) {
 
+	// run test server
+	var requests []*http.Request
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r)
+		if len(requests)%2 == 0 {
+			headers := w.Header()
+			headers["Cache-Control"] = []string{"max-age=290304000, public"}
+			w.WriteHeader(http.StatusOK)
+		} else {
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+
+	defer ts.Close()
+
+	t.Run("non-cacheable status code: intra-query cache", func(t *testing.T) {
+		base := fmt.Sprintf(`http.send({"method": "get", "url": %q, "cache": true})`, ts.URL)
+		query := fmt.Sprintf("%v;%v;%v", base, base, base)
+
+		q := NewQuery(ast.MustParseBody(query))
+
+		// Execute three http.send calls within a query.
+		// Since the server returns a http.StatusInternalServerError on the first request, this should NOT be cached as
+		// http.StatusInternalServerError is not a cacheable status code. The second request should result in OPA reaching
+		// out to the server again and getting a http.StatusOK response status code.
+		// The third request should now be served from the cache.
+
+		_, err := q.Run(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		expectedReqCount := 2
+		if len(requests) != expectedReqCount {
+			t.Fatalf("Expected to get %d requests, got %d", expectedReqCount, len(requests))
+		}
+	})
+}
+
+func TestHTTPSendCacheDefaultStatusCodesInterQueryCache(t *testing.T) {
+
+	// run test server
+	var requests []*http.Request
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r)
+		if len(requests)%2 == 0 {
+			headers := w.Header()
+			headers["Cache-Control"] = []string{"max-age=290304000, public"}
+			w.WriteHeader(http.StatusOK)
+		} else {
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+
+	defer ts.Close()
+
+	t.Run("non-cacheable status code: inter-query cache", func(t *testing.T) {
+
+		// add an inter-query cache
+		config, _ := iCache.ParseCachingConfig(nil)
+		interQueryCache := iCache.NewInterQueryCache(config)
+
+		m := metrics.New()
+
+		q := NewQuery(ast.MustParseBody(fmt.Sprintf(`http.send({"method": "get", "url": %q, "cache": true})`, ts.URL))).
+			WithMetrics(m).WithInterQueryBuiltinCache(interQueryCache)
+
+		// Execute three queries.
+		// Since the server returns a http.StatusInternalServerError on the first request, this should NOT be cached as
+		// http.StatusInternalServerError is not a cacheable status code. The second request should result in OPA reaching
+		// out to the server again and getting a http.StatusOK response status code.
+		// The third request should now be served from the cache.
+
+		_, err := q.Run(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = q.Run(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = q.Run(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		expectedReqCount := 2
+		if len(requests) != expectedReqCount {
+			t.Fatalf("Expected to get %d requests, got %d", expectedReqCount, len(requests))
+		}
+
+		// verify http.send inter-query cache hit metric is incremented due to the third request.
+		if exp, act := uint64(1), m.Counter(httpSendInterQueryCacheHits).Value(); exp != act {
+			t.Fatalf("expected %d cache hits, got %d", exp, act)
+		}
+	})
+}
+
+type onlyOnceInterQueryCache struct {
+	value   *interQueryCacheData
+	counter int
+}
+
+func (c *onlyOnceInterQueryCache) Get(_ ast.Value) (value iCache.InterQueryCacheValue, found bool) {
+	c.counter++
+	if c.counter == 1 {
+		return c.value, true
+	}
+	return nil, false
+}
+
+func (c *onlyOnceInterQueryCache) Insert(_ ast.Value, _ iCache.InterQueryCacheValue) int {
+	return 0
+}
+
+func (c *onlyOnceInterQueryCache) Delete(_ ast.Value) {}
+
+func (c *onlyOnceInterQueryCache) UpdateConfig(_ *iCache.Config) {}
+
+func TestInterQueryCacheConcurrentModification(t *testing.T) {
+
+	// create an inter-query cache that'll return a value on first access, but none at subsequent accesses.
+	clock := time.Now()
+	req := ast.NewObject(
+		[2]*ast.Term{ast.StringTerm("method"), ast.StringTerm("get")},
+		[2]*ast.Term{ast.StringTerm("url"), ast.StringTerm("foobar")},
+		[2]*ast.Term{ast.StringTerm("cache"), ast.BooleanTerm(true)},
+	)
+	resp := interQueryCacheData{
+		Headers: map[string][]string{
+			"Date": {"Thu, 01 Jan 1970 00:00:00 GMT"},
+		},
+		ExpiresAt: clock.Add(time.Hour),
+	}
+	interQueryCache := onlyOnceInterQueryCache{value: &resp}
+
+	reqStr := req.String()
+	rule := fmt.Sprintf(`package test
+	p := http.send(%s)
+	q := http.send(%s)
+`, reqStr, reqStr)
+	c, err := compileRules([]string{}, []string{}, []string{rule})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	qStr := "x = data.test.p; y = data.test.q"
+	ctx := context.Background()
+	store := inmem.New()
+	txn := storage.NewTransactionOrDie(ctx, store)
+	q := NewQuery(ast.MustParseBody(qStr)).
+		WithCompiler(c).
+		WithStore(store).
+		WithTransaction(txn).
+		WithInterQueryBuiltinCache(&interQueryCache).
+		WithTime(clock)
+
+	res, err := q.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if res[0]["x"].Value.Compare(res[0]["y"].Value) != 0 {
+		t.Fatalf("Expected x and y to be equal, got %v and %v", res[0]["x"].Value, res[0]["y"].Value)
+	}
+}
+
+func TestIntraQueryCache_ClientError(t *testing.T) {
+	data := loadSmallTestData()
+
+	tests := []struct {
+		note     string
+		rules    []string
+		expected string
+	}{
+		{
+			note: "raised errors",
+			rules: []string{`p["one"] { 
+	not http.send({"method": "GET", "url": "%URL%", "timeout": "10ms"}) 
+}`,
+				`p["two"] { 
+	not http.send({"method": "GET", "url": "%URL%", "timeout": "10ms"})
+}`},
+			expected: `["one", "two"]`,
+		},
+		{
+			note: "no raised errors",
+			rules: []string{`p["one"] { 
+	r := http.send({"method": "GET", "url": "%URL%", "timeout": "10ms", "raise_error": false}) 
+	r.error.code == "eval_http_send_network_error"
+}`,
+				`p["two"] { 
+	r := http.send({"method": "GET", "url": "%URL%", "timeout": "10ms", "raise_error": false})
+	r.error.code == "eval_http_send_network_error"
+}`},
+			expected: `["one", "two"]`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.note, func(t *testing.T) {
+			ch := make(chan *http.Request)
+			// A HTTP server that always causes a timeout
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				ch <- r
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"foo": "bar"}`)) // ignore error
+			}))
+			defer ts.Close()
+
+			var rules []string
+			for _, r := range tc.rules {
+				rules = append(rules, strings.ReplaceAll(r, "%URL%", ts.URL))
+			}
+
+			runTopDownTestCase(t, data, tc.note, rules, tc.expected)
+			requests := getAllRequests(ch)
+
+			// Note: The runTopDownTestCase ends up evaluating twice (once with and once without partial
+			// eval first), so expect 2x the total request count the test case specified.
+			actualCount := len(requests) / 2
+
+			if actualCount != 1 {
+				t.Fatalf("Expected exactly 1 call to HTTP server, got %v", actualCount)
+			}
+		})
+	}
+}
+
+func TestInterQueryCache_ClientError(t *testing.T) {
+	data := loadSmallTestData()
+
+	tests := []struct {
+		note     string
+		rules    []string
+		expected string
+	}{
+		{
+			note: "raised errors",
+			rules: []string{`p["one"] { 
+	not http.send({"method": "GET", "url": "%URL%", "timeout": "10ms", "cache": true}) 
+}`,
+				`p["two"] { 
+	not http.send({"method": "GET", "url": "%URL%", "timeout": "10ms", "cache": true})
+}`},
+			expected: `["one", "two"]`,
+		},
+		{
+			note: "no raised errors",
+			rules: []string{`p["one"] { 
+	r := http.send({"method": "GET", "url": "%URL%", "timeout": "10ms", "cache": true, "raise_error": false}) 
+	r.error.code == "eval_http_send_network_error"
+}`,
+				`p["two"] { 
+	r := http.send({"method": "GET", "url": "%URL%", "timeout": "10ms", "cache": true, "raise_error": false})
+	r.error.code == "eval_http_send_network_error"
+}`},
+			expected: `["one", "two"]`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.note, func(t *testing.T) {
+			ch := make(chan *http.Request)
+
+			// A HTTP server that always causes a timeout
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				ch <- r
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"foo": "bar"}`)) // ignore error
+			}))
+			defer ts.Close()
+
+			var rules []string
+			for _, r := range tc.rules {
+				rules = append(rules, strings.ReplaceAll(r, "%URL%", ts.URL))
+			}
+
+			runTopDownTestCase(t, data, tc.note, rules, tc.expected)
+			requests := getAllRequests(ch)
+
+			// Note: The runTopDownTestCase ends up evaluating twice (once with and once without partial
+			// eval first), so expect 2x the total request count the test case specified.
+			actualCount := len(requests) / 2
+
+			if actualCount != 1 {
+				t.Fatalf("Expected exactly 1 call to HTTP server, got %v", actualCount)
+			}
+		})
+	}
+}
+
+func getAllRequests(ch chan *http.Request) []*http.Request {
+	defer close(ch)
+	var requests []*http.Request
+	for {
+		select {
+		case x, ok := <-ch:
+			if ok {
+				requests = append(requests, x)
+			} else {
+				return requests
+			}
+		default:
+			return requests
+		}
+	}
+}
+
+func TestHTTPSendMetrics(t *testing.T) {
 	// run test server
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -2526,8 +3090,7 @@ func TestHTTPSendMetrics(t *testing.T) {
 }
 
 func TestInitDefaults(t *testing.T) {
-	os.Setenv("HTTP_SEND_TIMEOUT", "300mss")
-	defer os.Unsetenv("HTTP_SEND_TIMEOUT")
+	t.Setenv("HTTP_SEND_TIMEOUT", "300mss")
 
 	defer func() {
 		if r := recover(); r == nil {
@@ -2553,14 +3116,14 @@ func TestSocketHTTPGetRequest(t *testing.T) {
 	people = append(people, Person{ID: "1", Firstname: "John"})
 
 	// Create a local socket
-	tmpF, err := ioutil.TempFile("", "")
+	tmpF, err := os.CreateTemp("", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	socketPath := tmpF.Name()
 	tmpF.Close()
-	os.Remove(socketPath)
+	_ = os.Remove(socketPath)
 
 	socket, err := net.Listen("unix", socketPath)
 	if err != nil {
@@ -2571,6 +3134,7 @@ func TestSocketHTTPGetRequest(t *testing.T) {
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			headers := w.Header()
 			headers["test-header"] = []string{"test-value"}
+			headers["echo-query-string"] = []string{r.URL.RawQuery}
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode(people)
 		}),
@@ -2582,7 +3146,7 @@ func TestSocketHTTPGetRequest(t *testing.T) {
 	defer rs.Close()
 
 	path := fmt.Sprintf("socket=%s", url.PathEscape(socketPath))
-	rawURL := fmt.Sprintf("unix://localhost/end/point?%s", path) // Send a request to the server over the socket
+	rawURL := fmt.Sprintf("unix://localhost/end/point?%s&param1=value1&param2=value2", path) // Send a request to the server over the socket
 
 	// expected result
 	expectedResult := make(map[string]interface{})
@@ -2595,15 +3159,13 @@ func TestSocketHTTPGetRequest(t *testing.T) {
 	expectedResult["body"] = body
 	expectedResult["raw_body"] = "[{\"id\":\"1\",\"firstname\":\"John\"}]\n"
 	expectedResult["headers"] = map[string]interface{}{
-		"content-length": []interface{}{"32"},
-		"content-type":   []interface{}{"text/plain; charset=utf-8"},
-		"test-header":    []interface{}{"test-value"},
+		"content-length":    []interface{}{"32"},
+		"content-type":      []interface{}{"text/plain; charset=utf-8"},
+		"test-header":       []interface{}{"test-value"},
+		"echo-query-string": []interface{}{"param1=value1&param2=value2"},
 	}
 
-	resultObj, err := ast.InterfaceToValue(expectedResult)
-	if err != nil {
-		panic(err)
-	}
+	resultObj := ast.MustInterfaceToValue(expectedResult)
 
 	// run the test
 	tests := []struct {
@@ -2621,5 +3183,142 @@ func TestSocketHTTPGetRequest(t *testing.T) {
 
 	for _, tc := range tests {
 		runTopDownTestCase(t, data, tc.note, append(tc.rules, httpSendHelperRules...), tc.expected)
+	}
+}
+
+type tracemock struct {
+	called int
+}
+
+func (m *tracemock) NewTransport(rt http.RoundTripper, _ tracing.Options) http.RoundTripper {
+	m.called++
+	return rt
+}
+
+func (*tracemock) NewHandler(http.Handler, string, tracing.Options) http.Handler {
+	panic("unreachable")
+}
+
+func TestDistributedTracingEnabled(t *testing.T) {
+	mock := tracemock{}
+	tracing.RegisterHTTPTracing(&mock)
+
+	builtinContext := BuiltinContext{
+		Context:                context.Background(),
+		DistributedTracingOpts: tracing.NewOptions(true), // any option means it's enabled
+	}
+
+	_, client, err := createHTTPRequest(builtinContext, ast.NewObject())
+	if err != nil {
+		t.Fatalf("Unexpected error creating HTTP request %v", err)
+	}
+	if client.Transport == nil {
+		t.Fatal("No Transport defined")
+	}
+
+	if exp, act := 1, mock.called; exp != act {
+		t.Errorf("calls to NewTransported: expected %d, got %d", exp, act)
+	}
+}
+
+func TestDistributedTracingDisabled(t *testing.T) {
+	mock := tracemock{}
+	tracing.RegisterHTTPTracing(&mock)
+
+	builtinContext := BuiltinContext{
+		Context: context.Background(),
+	}
+
+	_, client, err := createHTTPRequest(builtinContext, ast.NewObject())
+	if err != nil {
+		t.Fatalf("Unexpected error creating HTTP request %v", err)
+	}
+	if client.Transport == nil {
+		t.Fatal("No Transport defined")
+	}
+
+	if exp, act := 0, mock.called; exp != act {
+		t.Errorf("calls to NewTransported: expected %d, got %d", exp, act)
+	}
+}
+
+func TestHTTPGetRequestAllowNet(t *testing.T) {
+	// test data
+	body := map[string]bool{"ok": true}
+
+	// test server
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(body)
+	}))
+
+	defer ts.Close()
+
+	// host
+	serverURL, err := url.Parse(ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverHost := strings.Split(serverURL.Host, ":")[0]
+
+	// expected result
+	expectedResult := make(map[string]interface{})
+	expectedResult["status"] = "200 OK"
+	expectedResult["status_code"] = http.StatusOK
+
+	expectedResult["body"] = body
+	expectedResult["raw_body"] = "{\"ok\":true}\n"
+
+	resultObj := ast.MustInterfaceToValue(expectedResult)
+
+	expectedError := &Error{Code: "eval_builtin_error", Message: fmt.Sprintf("http.send: unallowed host: %s", serverHost)}
+
+	rules := []string{fmt.Sprintf(
+		`p = x { http.send({"method": "get", "url": "%s", "force_json_decode": true}, resp); x := remove_headers(resp) }`, ts.URL)}
+
+	// run the test
+	tests := []struct {
+		note     string
+		rules    []string
+		options  func(*Query) *Query
+		expected interface{}
+	}{
+		{
+			"http.send allow_net nil",
+			rules,
+
+			setAllowNet(nil),
+			resultObj.String(),
+		},
+		{
+			"http.send allow_net match",
+			rules,
+			setAllowNet([]string{serverHost}),
+			resultObj.String(),
+		},
+		{
+			"http.send allow_net match + additional host",
+			rules,
+			setAllowNet([]string{serverHost, "example.com"}),
+			resultObj.String(),
+		},
+		{
+			"http.send allow_net empty",
+			rules,
+			setAllowNet([]string{}),
+			expectedError,
+		},
+		{
+			"http.send allow_net no match",
+			rules,
+			setAllowNet([]string{"example.com"}),
+			expectedError,
+		},
+	}
+
+	data := loadSmallTestData()
+
+	for _, tc := range tests {
+		runTopDownTestCase(t, data, tc.note, append(tc.rules, httpSendHelperRules...), tc.expected, tc.options)
 	}
 }

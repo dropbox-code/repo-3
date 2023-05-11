@@ -6,7 +6,6 @@ package sdk
 
 import (
 	"io"
-	"io/ioutil"
 
 	"github.com/sirupsen/logrus"
 
@@ -40,6 +39,11 @@ type Options struct {
 	// registered with the OPA SDK instance.
 	Plugins map[string]plugins.Factory
 
+	// ID provides an option to set a static ID for the OPA system, avoiding
+	// the need to generate a random one at initialization. Setting a static ID
+	// is recommended, as it makes it easier to track the system over time.
+	ID string
+
 	config []byte
 	block  bool
 }
@@ -61,12 +65,16 @@ func (o *Options) init() error {
 		o.ConsoleLogger = l
 	}
 
-	bs, err := ioutil.ReadAll(o.Config)
-	if err != nil {
-		return err
+	if o.Config == nil {
+		o.config = []byte("{}")
+	} else {
+		bs, err := io.ReadAll(o.Config)
+		if err != nil {
+			return err
+		}
+		o.config = bs
 	}
 
-	o.config = bs
 	return nil
 }
 
@@ -95,7 +103,7 @@ func (o *ConfigOptions) init() error {
 		o.block = true
 	}
 
-	bs, err := ioutil.ReadAll(o.Config)
+	bs, err := io.ReadAll(o.Config)
 	if err != nil {
 		return err
 	}

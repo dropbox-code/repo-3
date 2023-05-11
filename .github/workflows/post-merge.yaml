@@ -7,16 +7,16 @@ on:
 
 jobs:
   generate:
-    name: Sync Generated Code
-    runs-on: ubuntu-18.04
+    name: Sync Generated Code and Docs
+    runs-on: ubuntu-22.04
     steps:
       - name: Check out code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
-          token: ${{ secrets.GH_PUSH_TOKEN }}
+          token: ${{ secrets.GH_PUSH_TOKEN }} # required to push to protected branch below
 
       - name: Generate
-        run: make clean generate
+        run: make clean generate docs-generate-cli-docs
 
       - name: Commit & Push
         shell: bash
@@ -45,13 +45,34 @@ jobs:
             echo "No generated changes to push!"
           fi
 
+          AUTHOR=cli-docs-updater
+          git config user.name ${AUTHOR}
+          git config user.email ${AUTHOR}@github.com
+
+          # Prevent looping if the build was non-deterministic..
+          CAN_PUSH=1
+          if [[ "$(git log -1 --pretty=format:'%an')" == "${AUTHOR}" ]]; then
+              CAN_PUSH=0
+          fi
+
+          if ./build/commit-cli-docs.sh; then
+            if [[ "${CAN_PUSH}" == "1" ]]; then
+              git push
+            else
+              echo "Previous commit was auto-generated -- Aborting!"
+              exit 1
+            fi
+          else
+            echo "No generated changes to push!"
+          fi
+
   code-coverage:
     name: Update Go Test Coverage
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-22.04
     needs: generate
     steps:
       - name: Check out code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
 
       - name: Unit Test Golang
         run: make ci-go-test-coverage
@@ -59,11 +80,11 @@ jobs:
 
   release-build:
     name: Release Build (linux, windows)
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-22.04
     needs: generate
     steps:
       - name: Check out code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
 
       - name: Build Linux and Windows
         run: make ci-go-ci-build-linux ci-go-ci-build-linux-static ci-go-ci-build-windows
@@ -71,8 +92,15 @@ jobs:
         env:
           TELEMETRY_URL: ${{ secrets.TELEMETRY_URL }}
 
+      - name: Build Linux arm64
+        run: make ci-go-ci-build-linux-static
+        timeout-minutes: 30
+        env:
+          GOARCH: arm64
+          TELEMETRY_URL: ${{ secrets.TELEMETRY_URL }}
+
       - name: Upload binaries
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         if: always()
         with:
           name: binaries
@@ -84,14 +112,14 @@ jobs:
     needs: generate
     steps:
       - name: Check out code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
 
       - id: go_version
         name: Read go version
-        run: echo "::set-output name=go_version::$(cat .go-version)"
+        run: echo "go_version=$(cat .go-version)" >> $GITHUB_OUTPUT
 
       - name: Install Go (${{ steps.go_version.outputs.go_version }})
-        uses: actions/setup-go@v2
+        uses: actions/setup-go@v4
         with:
           go-version: ${{ steps.go_version.outputs.go_version }}
 
@@ -102,7 +130,7 @@ jobs:
           TELEMETRY_URL: ${{ secrets.TELEMETRY_URL }}
 
       - name: Upload binaries (darwin)
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         if: always()
         with:
           name: binaries
@@ -110,21 +138,24 @@ jobs:
 
   deploy-edge:
     name: Push Edge Release
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-22.04
     needs: [release-build, release-build-darwin]
     steps:
       - name: Check out code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
 
       - name: Test
         run: make ci-release-test
         timeout-minutes: 60
 
       - name: Download release binaries
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: binaries
           path: _release
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
 
       - name: Deploy OPA Edge
         env:
@@ -140,11 +171,11 @@ jobs:
 
   deploy-wasm-builder:
     name: Deploy WASM Builder
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-22.04
     needs: generate
     steps:
       - name: Check out code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
 
       - name: Build and Push opa-wasm-builder
         env:

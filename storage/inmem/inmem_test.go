@@ -11,7 +11,9 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/open-policy-agent/opa/storage/internal/errors"
+	"github.com/open-policy-agent/opa/bundle"
+	"github.com/open-policy-agent/opa/internal/file/archive"
+	storageerrors "github.com/open-policy-agent/opa/storage/internal/errors"
 
 	"github.com/open-policy-agent/opa/storage"
 	"github.com/open-policy-agent/opa/util"
@@ -35,12 +37,12 @@ func TestInMemoryRead(t *testing.T) {
 		{"/d/e/1", "baz"},
 		{"/d/e", []interface{}{"bar", "baz"}},
 		{"/c/0/z", map[string]interface{}{"p": true, "q": false}},
-		{"/a/0/beef", errors.NewNotFoundError(storage.MustParsePath("/a/0/beef"))},
-		{"/d/100", errors.NewNotFoundError(storage.MustParsePath("/d/100"))},
-		{"/dead/beef", errors.NewNotFoundError(storage.MustParsePath("/dead/beef"))},
-		{"/a/str", errors.NewNotFoundErrorWithHint(storage.MustParsePath("/a/str"), errors.ArrayIndexTypeMsg)},
-		{"/a/100", errors.NewNotFoundErrorWithHint(storage.MustParsePath("/a/100"), errors.OutOfRangeMsg)},
-		{"/a/-1", errors.NewNotFoundErrorWithHint(storage.MustParsePath("/a/-1"), errors.OutOfRangeMsg)},
+		{"/a/0/beef", storageerrors.NewNotFoundError(storage.MustParsePath("/a/0/beef"))},
+		{"/d/100", storageerrors.NewNotFoundError(storage.MustParsePath("/d/100"))},
+		{"/dead/beef", storageerrors.NewNotFoundError(storage.MustParsePath("/dead/beef"))},
+		{"/a/str", storageerrors.NewNotFoundErrorWithHint(storage.MustParsePath("/a/str"), storageerrors.ArrayIndexTypeMsg)},
+		{"/a/100", storageerrors.NewNotFoundErrorWithHint(storage.MustParsePath("/a/100"), storageerrors.OutOfRangeMsg)},
+		{"/a/-1", storageerrors.NewNotFoundErrorWithHint(storage.MustParsePath("/a/-1"), storageerrors.OutOfRangeMsg)},
 	}
 
 	store := NewFromObject(data)
@@ -87,12 +89,15 @@ func TestInMemoryWrite(t *testing.T) {
 		{"add obj (existing)", "add", "/b/v2", `"x"`, nil, "/b", `{"v1": "hello", "v2": "x"}`},
 
 		{"append arr", "add", "/a/-", `"x"`, nil, "/a", `[1,2,3,4,"x"]`},
+		{"append arr-2", "add", "/a/4", `"x"`, nil, "/a", `[1,2,3,4,"x"]`},
 		{"append obj/arr", "add", `/c/0/x/-`, `"x"`, nil, "/c/0/x", `[true,false,"foo","x"]`},
+		{"append obj/arr-2", "add", `/c/0/x/3`, `"x"`, nil, "/c/0/x", `[true,false,"foo","x"]`},
 		{"append arr/arr", "add", `/h/0/-`, `"x"`, nil, `/h/0/3`, `"x"`},
+		{"append arr/arr-2", "add", `/h/0/3`, `"x"`, nil, `/h/0/3`, `"x"`},
 		{"append err", "remove", "/c/0/x/-", "", invalidPatchError("/c/0/x/-: invalid patch path"), "", nil},
 		{"append err-2", "replace", "/c/0/x/-", "", invalidPatchError("/c/0/x/-: invalid patch path"), "", nil},
 
-		{"remove", "remove", "/a", "", nil, "/a", errors.NewNotFoundError(storage.MustParsePath("/a"))},
+		{"remove", "remove", "/a", "", nil, "/a", storageerrors.NewNotFoundError(storage.MustParsePath("/a"))},
 		{"remove arr", "remove", "/a/1", "", nil, "/a", "[1,3,4]"},
 		{"remove obj/arr", "remove", "/c/0/x/1", "", nil, "/c/0/x", `[true,"foo"]`},
 		{"remove arr/arr", "remove", "/h/0/1", "", nil, "/h/0", "[1,3]"},
@@ -105,21 +110,21 @@ func TestInMemoryWrite(t *testing.T) {
 
 		{"err: bad root type", "add", "/", "[1,2,3]", invalidPatchError(rootMustBeObjectMsg), "", nil},
 		{"err: remove root", "remove", "/", "", invalidPatchError(rootCannotBeRemovedMsg), "", nil},
-		{"err: add arr (non-integer)", "add", "/a/foo", "1", errors.NewNotFoundErrorWithHint(storage.MustParsePath("/a/foo"), errors.ArrayIndexTypeMsg), "", nil},
-		{"err: add arr (non-integer)", "add", "/a/3.14", "1", errors.NewNotFoundErrorWithHint(storage.MustParsePath("/a/3.14"), errors.ArrayIndexTypeMsg), "", nil},
-		{"err: add arr (out of range)", "add", "/a/5", "1", errors.NewNotFoundErrorWithHint(storage.MustParsePath("/a/5"), errors.OutOfRangeMsg), "", nil},
-		{"err: add arr (out of range)", "add", "/a/-1", "1", errors.NewNotFoundErrorWithHint(storage.MustParsePath("/a/-1"), errors.OutOfRangeMsg), "", nil},
-		{"err: add arr (missing root)", "add", "/dead/beef/0", "1", errors.NewNotFoundError(storage.MustParsePath("/dead/beef/0")), "", nil},
-		{"err: add non-coll", "add", "/a/1/2", "1", errors.NewNotFoundError(storage.MustParsePath("/a/1/2")), "", nil},
-		{"err: append (missing)", "add", `/dead/beef/-`, "1", errors.NewNotFoundError(storage.MustParsePath("/dead/beef/-")), "", nil},
-		{"err: append obj/arr", "add", `/c/0/deadbeef/-`, `"x"`, errors.NewNotFoundError(storage.MustParsePath("/c/0/deadbeef/-")), "", nil},
-		{"err: append arr/arr (out of range)", "add", `/h/9999/-`, `"x"`, errors.NewNotFoundErrorWithHint(storage.MustParsePath("/h/9999/-"), errors.OutOfRangeMsg), "", nil},
-		{"err: append append+add", "add", `/a/-/b/-`, `"x"`, errors.NewNotFoundErrorWithHint(storage.MustParsePath(`/a/-/b/-`), errors.ArrayIndexTypeMsg), "", nil},
-		{"err: append arr/arr (non-array)", "add", `/b/v1/-`, "1", errors.NewNotFoundError(storage.MustParsePath("/b/v1/-")), "", nil},
-		{"err: remove missing", "remove", "/dead/beef/0", "", errors.NewNotFoundError(storage.MustParsePath("/dead/beef/0")), "", nil},
-		{"err: remove obj (missing)", "remove", "/b/deadbeef", "", errors.NewNotFoundError(storage.MustParsePath("/b/deadbeef")), "", nil},
-		{"err: replace root (missing)", "replace", "/deadbeef", "1", errors.NewNotFoundError(storage.MustParsePath("/deadbeef")), "", nil},
-		{"err: replace missing", "replace", "/dead/beef/1", "1", errors.NewNotFoundError(storage.MustParsePath("/dead/beef/1")), "", nil},
+		{"err: add arr (non-integer)", "add", "/a/foo", "1", storageerrors.NewNotFoundErrorWithHint(storage.MustParsePath("/a/foo"), storageerrors.ArrayIndexTypeMsg), "", nil},
+		{"err: add arr (non-integer)", "add", "/a/3.14", "1", storageerrors.NewNotFoundErrorWithHint(storage.MustParsePath("/a/3.14"), storageerrors.ArrayIndexTypeMsg), "", nil},
+		{"err: add arr (out of range)", "add", "/a/5", "1", storageerrors.NewNotFoundErrorWithHint(storage.MustParsePath("/a/5"), storageerrors.OutOfRangeMsg), "", nil},
+		{"err: add arr (out of range)", "add", "/a/-1", "1", storageerrors.NewNotFoundErrorWithHint(storage.MustParsePath("/a/-1"), storageerrors.OutOfRangeMsg), "", nil},
+		{"err: add arr (missing root)", "add", "/dead/beef/0", "1", storageerrors.NewNotFoundError(storage.MustParsePath("/dead/beef/0")), "", nil},
+		{"err: add non-coll", "add", "/a/1/2", "1", storageerrors.NewNotFoundError(storage.MustParsePath("/a/1/2")), "", nil},
+		{"err: append (missing)", "add", `/dead/beef/-`, "1", storageerrors.NewNotFoundError(storage.MustParsePath("/dead/beef/-")), "", nil},
+		{"err: append obj/arr", "add", `/c/0/deadbeef/-`, `"x"`, storageerrors.NewNotFoundError(storage.MustParsePath("/c/0/deadbeef/-")), "", nil},
+		{"err: append arr/arr (out of range)", "add", `/h/9999/-`, `"x"`, storageerrors.NewNotFoundErrorWithHint(storage.MustParsePath("/h/9999/-"), storageerrors.OutOfRangeMsg), "", nil},
+		{"err: append append+add", "add", `/a/-/b/-`, `"x"`, storageerrors.NewNotFoundErrorWithHint(storage.MustParsePath(`/a/-/b/-`), storageerrors.ArrayIndexTypeMsg), "", nil},
+		{"err: append arr/arr (non-array)", "add", `/b/v1/-`, "1", storageerrors.NewNotFoundError(storage.MustParsePath("/b/v1/-")), "", nil},
+		{"err: remove missing", "remove", "/dead/beef/0", "", storageerrors.NewNotFoundError(storage.MustParsePath("/dead/beef/0")), "", nil},
+		{"err: remove obj (missing)", "remove", "/b/deadbeef", "", storageerrors.NewNotFoundError(storage.MustParsePath("/b/deadbeef")), "", nil},
+		{"err: replace root (missing)", "replace", "/deadbeef", "1", storageerrors.NewNotFoundError(storage.MustParsePath("/deadbeef")), "", nil},
+		{"err: replace missing", "replace", "/dead/beef/1", "1", storageerrors.NewNotFoundError(storage.MustParsePath("/dead/beef/1")), "", nil},
 	}
 
 	ctx := context.Background()
@@ -255,12 +260,14 @@ func TestInMemoryTxnMultipleWrites(t *testing.T) {
 		{storage.AddOp, "/a/-", "[]"},
 		{storage.AddOp, "/a/4/-", "1"},
 		{storage.AddOp, "/a/4/-", "2"},
+		{storage.AddOp, "/a/4/2", "3"},
 		{storage.AddOp, "/b/foo", "{}"},
 		{storage.AddOp, "/b/foo/bar", "{}"},
 		{storage.AddOp, "/b/foo/bar/baz", "1"},
 		{storage.AddOp, "/arr", "[]"},
 		{storage.AddOp, "/arr/-", "1"},
 		{storage.AddOp, "/arr/0", "2"},
+		{storage.AddOp, "/arr/2", "3"},
 		{storage.AddOp, "/c/0/x/-", "0"},
 		{storage.AddOp, "/_", "null"}, // introduce new txn.log head
 		{storage.AddOp, "/c/0", `"new c[0]"`},
@@ -275,9 +282,9 @@ func TestInMemoryTxnMultipleWrites(t *testing.T) {
 		path     string
 		expected string
 	}{
-		{"/a", `[1,2,3,4,[1,2]]`},
+		{"/a", `[1,2,3,4,[1,2,3]]`},
 		{"/b/foo", `{"bar": {"baz": 1}}`},
-		{"/arr", `[2,1]`},
+		{"/arr", `[2,1,3]`},
 		{"/c/0", `"new c[0]"`},
 		{"/c/1", `"new c[1]"`},
 		{"/d/f", `{"g": {"h": 0, "i": {"j": 1}}}`},
@@ -318,6 +325,230 @@ func TestInMemoryTxnMultipleWrites(t *testing.T) {
 	}
 }
 
+func TestTruncateNoExistingPath(t *testing.T) {
+	ctx := context.Background()
+	store := NewFromObject(map[string]interface{}{})
+	txn := storage.NewTransactionOrDie(ctx, store, storage.WriteParams)
+
+	var archiveFiles = map[string]string{
+		"/a/b/c/data.json": "[1,2,3]",
+	}
+
+	files := make([][2]string, 0, len(archiveFiles))
+	for name, content := range archiveFiles {
+		files = append(files, [2]string{name, content})
+	}
+
+	buf := archive.MustWriteTarGz(files)
+	b, err := bundle.NewReader(buf).WithLazyLoadingMode(true).Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	iterator := bundle.NewIterator(b.Raw)
+
+	params := storage.WriteParams
+	params.BasePaths = []string{""}
+
+	err = store.Truncate(ctx, txn, params, iterator)
+	if err != nil {
+		t.Fatalf("Unexpected truncate error: %v", err)
+	}
+
+	if err := store.Commit(ctx, txn); err != nil {
+		t.Fatalf("Unexpected commit error: %v", err)
+	}
+
+	txn = storage.NewTransactionOrDie(ctx, store)
+
+	actual, err := store.Read(ctx, txn, storage.MustParsePath("/"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expected := `
+{
+	"a": {
+		"b": {
+			"c": [1,2,3]
+		}
+	}
+}
+`
+	jsn := util.MustUnmarshalJSON([]byte(expected))
+
+	if !reflect.DeepEqual(jsn, actual) {
+		t.Fatalf("Expected reader's read to be %v but got: %v", jsn, actual)
+	}
+}
+
+func TestTruncate(t *testing.T) {
+	ctx := context.Background()
+	store := NewFromObject(map[string]interface{}{})
+	txn := storage.NewTransactionOrDie(ctx, store, storage.WriteParams)
+
+	var archiveFiles = map[string]string{
+		"/a/b/c/data.json":   "[1,2,3]",
+		"/a/b/d/data.json":   "true",
+		"/data.json":         `{"x": {"y": true}, "a": {"b": {"z": true}}}}`,
+		"/a/b/y/data.yaml":   `foo: 1`,
+		"/policy.rego":       "package foo\n p = 1",
+		"/roles/policy.rego": "package bar\n p = 1",
+	}
+
+	files := make([][2]string, 0, len(archiveFiles))
+	for name, content := range archiveFiles {
+		files = append(files, [2]string{name, content})
+	}
+
+	buf := archive.MustWriteTarGz(files)
+	b, err := bundle.NewReader(buf).WithLazyLoadingMode(true).Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	iterator := bundle.NewIterator(b.Raw)
+
+	params := storage.WriteParams
+	params.BasePaths = []string{""}
+
+	err = store.Truncate(ctx, txn, params, iterator)
+	if err != nil {
+		t.Fatalf("Unexpected truncate error: %v", err)
+	}
+
+	if err := store.Commit(ctx, txn); err != nil {
+		t.Fatalf("Unexpected commit error: %v", err)
+	}
+
+	txn = storage.NewTransactionOrDie(ctx, store)
+
+	actual, err := store.Read(ctx, txn, storage.MustParsePath("/"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expected := `
+{
+	"a": {
+		"b": {
+			"c": [1,2,3],
+			"d": true,
+			"y": {
+				"foo": 1
+			},
+			"z": true
+		}
+	},
+	"x": {
+		"y": true
+	}
+}
+`
+	jsn := util.MustUnmarshalJSON([]byte(expected))
+
+	if !reflect.DeepEqual(jsn, actual) {
+		t.Fatalf("Expected reader's read to be %v but got: %v", jsn, actual)
+	}
+
+	store.Abort(ctx, txn)
+
+	txn = storage.NewTransactionOrDie(ctx, store)
+	ids, err := store.ListPolicies(ctx, txn)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedIds := map[string]struct{}{"policy.rego": {}, "roles/policy.rego": {}}
+
+	for _, id := range ids {
+		if _, ok := expectedIds[id]; !ok {
+			t.Fatalf("Expected list policies to contain %v but got: %v", id, expectedIds)
+		}
+	}
+
+	bs, err := store.GetPolicy(ctx, txn, "policy.rego")
+	expectedBytes := []byte("package foo\n p = 1")
+	if err != nil || !reflect.DeepEqual(expectedBytes, bs) {
+		t.Fatalf("Expected get policy to return %v but got: %v (err: %v)", expectedBytes, bs, err)
+	}
+
+	bs, err = store.GetPolicy(ctx, txn, "roles/policy.rego")
+	expectedBytes = []byte("package bar\n p = 1")
+	if err != nil || !reflect.DeepEqual(expectedBytes, bs) {
+		t.Fatalf("Expected get policy to return %v but got: %v (err: %v)", expectedBytes, bs, err)
+	}
+}
+
+func TestTruncateDataMergeError(t *testing.T) {
+	ctx := context.Background()
+	store := NewFromObject(map[string]interface{}{})
+	txn := storage.NewTransactionOrDie(ctx, store, storage.WriteParams)
+
+	var archiveFiles = map[string]string{
+		"/a/b/data.json": `{"c": "foo"}`,
+		"/data.json":     `{"a": {"b": {"c": "bar"}}}`,
+	}
+
+	files := make([][2]string, 0, len(archiveFiles))
+	for name, content := range archiveFiles {
+		files = append(files, [2]string{name, content})
+	}
+
+	buf := archive.MustWriteTarGz(files)
+	b, err := bundle.NewReader(buf).WithLazyLoadingMode(true).Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	iterator := bundle.NewIterator(b.Raw)
+
+	err = store.Truncate(ctx, txn, storage.WriteParams, iterator)
+	if err == nil {
+		t.Fatal("Expected truncate error but got nil")
+	}
+
+	expected := "failed to insert data file from path a/b"
+	if err.Error() != expected {
+		t.Fatalf("Expected error %v but got %v", expected, err.Error())
+	}
+}
+
+func TestTruncateBadRootWrite(t *testing.T) {
+	ctx := context.Background()
+	store := NewFromObject(map[string]interface{}{})
+	txn := storage.NewTransactionOrDie(ctx, store, storage.WriteParams)
+
+	var archiveFiles = map[string]string{
+		"/a/b/d/data.json":   "true",
+		"/data.json":         "[1,2,3]",
+		"/roles/policy.rego": "package bar\n p = 1",
+	}
+
+	files := make([][2]string, 0, len(archiveFiles))
+	for name, content := range archiveFiles {
+		files = append(files, [2]string{name, content})
+	}
+
+	buf := archive.MustWriteTarGz(files)
+	b, err := bundle.NewReader(buf).WithLazyLoadingMode(true).Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	iterator := bundle.NewIterator(b.Raw)
+
+	err = store.Truncate(ctx, txn, storage.WriteParams, iterator)
+	if err == nil {
+		t.Fatal("Expected truncate error but got nil")
+	}
+
+	expected := "storage_invalid_patch_error: root must be object"
+	if err.Error() != expected {
+		t.Fatalf("Expected error %v but got %v", expected, err.Error())
+	}
+}
+
 func TestInMemoryTxnWriteFailures(t *testing.T) {
 
 	ctx := context.Background()
@@ -337,6 +568,7 @@ func TestInMemoryTxnWriteFailures(t *testing.T) {
 		{storage.AddOp, "/a/0/beef", "", storage.NotFoundErr},
 		{storage.AddOp, "/arr", `[1,2,3]`, ""},
 		{storage.AddOp, "/arr/0/foo", "", storage.NotFoundErr},
+		{storage.AddOp, "/arr/4", "", storage.NotFoundErr},
 	}
 
 	for _, w := range writes {
@@ -604,7 +836,7 @@ func TestInMemoryContext(t *testing.T) {
 	}
 
 	_, err = store.Register(ctx, txn, storage.TriggerConfig{
-		OnCommit: func(ctx context.Context, txn storage.Transaction, event storage.TriggerEvent) {
+		OnCommit: func(_ context.Context, _ storage.Transaction, event storage.TriggerEvent) {
 			if event.Context.Get("foo") != "bar" {
 				t.Fatalf("Expected foo/bar in context but got: %+v", event.Context)
 			} else if event.Context.Get("deadbeef") != nil {
@@ -673,4 +905,71 @@ func loadSmallTestData() map[string]interface{} {
 		panic(err)
 	}
 	return data
+}
+
+func TestOptRoundTripOnWrite(t *testing.T) {
+	validObject := map[string]string{"foo": "bar"}
+
+	// self-referential objects are not serializable to JSON.
+	invalidObject := map[string]interface{}{}
+	invalidObject["foo"] = invalidObject
+
+	tests := []struct {
+		name    string
+		opts    []Opt
+		obj     interface{}
+		wantErr bool
+	}{{
+		name:    "success on valid object no Opts",
+		opts:    nil,
+		obj:     validObject,
+		wantErr: false,
+	}, {
+		name:    "success on valid object round trip enabled",
+		opts:    []Opt{OptRoundTripOnWrite(true)},
+		obj:     validObject,
+		wantErr: false,
+	}, {
+		name:    "success on valid object round trip disabled",
+		opts:    []Opt{OptRoundTripOnWrite(false)},
+		obj:     validObject,
+		wantErr: false,
+	}, {
+		// Ensure the setting defaults to "true".
+		name:    "failure on invalid object no Opts",
+		opts:    nil,
+		obj:     invalidObject,
+		wantErr: true,
+	}, {
+		name:    "failure on invalid object round trip enabled",
+		opts:    []Opt{OptRoundTripOnWrite(true)},
+		obj:     invalidObject,
+		wantErr: true,
+	}, {
+		// While this represents a bad use case, it's how we know the round-tripping
+		// has been disabled.
+		name:    "success on invalid object round trip disabled",
+		opts:    []Opt{OptRoundTripOnWrite(false)},
+		obj:     invalidObject,
+		wantErr: false,
+	}}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := NewWithOpts(tt.opts...)
+			ctx := context.Background()
+
+			txn, err := db.NewTransaction(ctx, storage.WriteParams)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			err = db.Write(ctx, txn, storage.AddOp, []string{"data"}, tt.obj)
+			if tt.wantErr && err == nil {
+				t.Fatal("got Write error = nil, want error")
+			} else if !tt.wantErr && err != nil {
+				t.Fatalf("got Write error, want nil")
+			}
+		})
+	}
 }

@@ -13,7 +13,7 @@ import (
 
 	"github.com/open-policy-agent/opa/ast"
 	"github.com/open-policy-agent/opa/storage"
-	"github.com/open-policy-agent/opa/storage/inmem"
+	inmem "github.com/open-policy-agent/opa/storage/inmem/test"
 	"github.com/open-policy-agent/opa/util"
 )
 
@@ -27,11 +27,13 @@ func TestTopDownPartialEval(t *testing.T) {
 		skipPartialNamespace bool
 		query                string
 		modules              []string
+		moduleASTs           []*ast.Module
 		data                 string
 		input                string
 		wantQueries          []string
 		wantQueryASTs        []ast.Body
 		wantSupport          []string
+		wantSupportASTs      []*ast.Module
 		ignoreOrder          bool
 	}{
 		{
@@ -758,6 +760,348 @@ func TestTopDownPartialEval(t *testing.T) {
 			wantQueries: []string{`{} = a`},
 		},
 		{
+			note:  "with+builtin: no unknowns",
+			query: "data.test.p = a",
+			modules: []string{
+				`package test
+
+				mock_concat(_, _) = "foo/bar"
+				p { q with concat as mock_concat }
+				q { concat("/", ["a", "b"], "foo/bar") }`,
+			},
+			wantQueries: []string{`a = true`},
+		},
+		{
+			note:  "with+builtin: value replacement",
+			query: "data.test.p = a",
+			modules: []string{
+				`package test
+
+				p { q with concat as "foo/bar" }
+				q { concat("/", ["a", "b"], "foo/bar") }`,
+			},
+			wantQueries: []string{`a = true`},
+		},
+		{
+			note:  "with+function: no unknowns",
+			query: "data.test.p = a",
+			modules: []string{
+				`package test
+				f(_, _) = "x"
+				mock_f(_, _) = "foo/bar"
+				p { q with f as mock_f }
+				q { f("/", ["a", "b"], "foo/bar") }`,
+			},
+			wantQueries: []string{`a = true`},
+		},
+		{
+			note:  "with+function: value replacement",
+			query: "data.test.p = a",
+			modules: []string{
+				`package test
+				f(_, _) = "x"
+				p { q with f as "foo/bar" }
+				q { f("/", ["a", "b"], "foo/bar") }`,
+			},
+			wantQueries: []string{`a = true`},
+		},
+		{
+			note:  "with+builtin: unknowns in replacement function",
+			query: "data.test.p = a",
+			modules: []string{
+				`package test
+
+				mock_concat(x, _) = concat(x, input)
+				p { q with concat as mock_concat}
+				q { concat("/", ["a", "b"], "foo/bar") }`,
+			},
+			wantQueries: []string{`data.partial.test.mock_concat("/", ["a", "b"], "foo/bar"); a = true`},
+			wantSupport: []string{
+				`package partial.test
+
+				mock_concat(__local0__3, __local1__3) = __local2__3 {
+					__local3__3 = input
+					concat(__local0__3, __local3__3, __local2__3)
+				}`,
+			},
+		},
+		{
+			note:  "with+function: unknowns in replacement function",
+			query: "data.test.p = a",
+			modules: []string{
+				`package test
+				f(_) = "x/y"
+				mock_f(_) = "foo/bar" { input.y }
+				p { q with f as mock_f}
+				q { f("/", "foo/bar") }`,
+			},
+			wantQueries: []string{`data.partial.test.mock_f("/", "foo/bar"); a = true`},
+			wantSupport: []string{
+				`package partial.test
+
+				mock_f(__local1__3) = "foo/bar" {
+					input.y = x_term_3_03
+					x_term_3_03
+				}`,
+			},
+		},
+		{
+			note:  "with+builtin: unknowns in replaced function's args",
+			query: "data.test.p = a",
+			modules: []string{
+				`package test
+
+				mock_concat(_, _) = ["foo", "bar"]
+				p {
+					q with array.concat as mock_concat
+				}
+				q {
+					array.concat(["foo"], input, ["foo", "bar"])
+				}`,
+			},
+			wantQueries: []string{`
+				data.partial.test.q
+				a = true
+			`},
+			wantSupport: []string{`package partial.test
+
+				q {
+					data.partial.test.mock_concat(["foo"], input, ["foo", "bar"])
+				}
+				mock_concat(__local0__3, __local1__3) = ["foo", "bar"]
+			`},
+		},
+		{
+			note:  "with+function: unknowns in replaced function's args",
+			query: "data.test.p = a",
+			modules: []string{
+				`package test
+				my_concat(x, y) = concat(x, y)
+				mock_concat(_, _) = "foo,bar"
+				p {
+					q with my_concat as mock_concat
+				}
+				q {
+					my_concat("/", input, "foo,bar")
+				}`,
+			},
+			wantQueries: []string{`
+				data.partial.test.q
+				a = true
+			`},
+			wantSupport: []string{`package partial.test
+
+				q {
+					data.partial.test.mock_concat("/", input, "foo,bar")
+				}
+				mock_concat(__local2__3, __local3__3) = "foo,bar"
+			`},
+		},
+		{
+			note:  "with+builtin: unknowns in replacement function's bodies",
+			query: "data.test.p = a",
+			modules: []string{
+				`package test
+
+				mock_concat(_, _) = ["foo", "bar"] { input.foo }
+				mock_concat(_, _) = ["bar", "baz"] { input.bar }
+
+				p { q with array.concat as mock_concat }
+				q { x := array.concat(["foo"], input) }`,
+			},
+			wantQueries: []string{`
+				data.partial.test.q
+				a = true
+			`},
+			wantSupport: []string{`package partial.test
+
+			q {
+				__local6__2 = input
+				data.partial.test.mock_concat(["foo"], __local6__2, __local5__2)
+				__local4__2 = __local5__2
+			}
+			mock_concat(__local0__3, __local1__3) = ["foo", "bar"] {
+				input.foo = x_term_3_03
+				x_term_3_03
+			}
+			mock_concat(__local2__4, __local3__4) = ["bar", "baz"] {
+				input.bar = x_term_4_04
+				x_term_4_04
+			}`},
+		},
+		{
+			note:  "with+function: unknowns in replacement function's bodies",
+			query: "data.test.p = a",
+			modules: []string{
+				`package test
+				my_concat(x, y) = concat(x, y)
+				mock_concat(_, _) = "foo,bar" { input.foo }
+				mock_concat(_, _) = "bar,baz" { input.bar }
+
+				p { q with my_concat as mock_concat }
+				q { x := my_concat(",", input) }`,
+			},
+			wantQueries: []string{`
+				data.partial.test.q
+				a = true
+			`},
+			wantSupport: []string{`package partial.test
+
+			q {
+				__local9__2 = input
+				data.partial.test.mock_concat(",", __local9__2, __local8__2)
+				__local6__2 = __local8__2
+			}
+			mock_concat(__local2__3, __local3__3) = "foo,bar" {
+				input.foo = x_term_3_03
+				x_term_3_03
+			}
+			mock_concat(__local4__4, __local5__4) = "bar,baz" {
+				input.bar = x_term_4_04
+				x_term_4_04
+			}`},
+		},
+		{
+			note:  "with+builtin+negation: when replacement has no unknowns (args, defs), save negated expr without replacement",
+			query: "data.test.p = true",
+			modules: []string{`
+				package test
+
+				mock_count(_) = 100
+				p {
+					not q with input.x as 1 with count as mock_count
+				}
+
+				q {
+					count([1,2,3]) = input.x
+				}
+			`},
+			wantQueries: []string{"not data.partial.test.q with input.x as 1"},
+			wantSupport: []string{`
+				package partial.test
+
+				q { 100 = input.x }
+			`},
+		},
+		{
+			note:  "with+function+negation: when replacement has no unknowns (args, defs), save negated expr without replacement",
+			query: "data.test.p = true",
+			modules: []string{`
+				package test
+				my_count(x) = count(x)
+				mock_count(_) = 100
+				p {
+					not q with input.x as 1 with my_count as mock_count
+				}
+
+				q {
+					my_count([1,2,3]) = input.x
+				}
+			`},
+			wantQueries: []string{"not data.partial.test.q with input.x as 1"},
+			wantSupport: []string{`
+				package partial.test
+
+				q { 100 = input.x }
+			`},
+		},
+		{
+			note:  "with+builtin+negation: when replacement args have unknowns, save negated expr with replacement",
+			query: "data.test.p = true",
+			modules: []string{`
+				package test
+
+				mock_count(_) = 100
+				p {
+					not q with input.x as 1 with count as mock_count
+				}
+
+				q {
+					count(input.y) = input.x # unknown arg for mocked func
+				}
+			`},
+			wantQueries: []string{"not data.partial.test.q with input.x as 1"},
+			wantSupport: []string{`
+				package partial.test
+
+				q { data.partial.test.mock_count(input.y, __local1__3); __local1__3 = input.x }
+				mock_count(__local0__4) = 100 
+			`},
+		},
+		{
+			note:  "with+function+negation: when replacement args have unknowns, save negated expr with replacement",
+			query: "data.test.p = true",
+			modules: []string{`
+				package test
+				my_count(x) = count(x)
+				mock_count(_) = 100
+				p {
+					not q with input.x as 1 with my_count as mock_count
+				}
+
+				q {
+					my_count(input.y) = input.x # unknown arg for mocked func
+				}
+			`},
+			wantQueries: []string{`not data.partial.test.q with input.x as 1`},
+			wantSupport: []string{`
+				package partial.test
+
+				q { data.partial.test.mock_count(input.y, __local3__3); __local3__3 = input.x }
+				mock_count(__local1__4) = 100
+			`},
+		},
+		{
+			note:  "with+builtin+negation: when replacement defs have unknowns, save negated expr with replacement",
+			query: "data.test.p = true",
+			modules: []string{`
+				package test
+
+				mock_count(_) = 100 { input.y }
+				mock_count(_) = 101 { input.z }
+				p {
+					not q with input.x as 1 with count as mock_count
+				}
+
+				q {
+					count([1]) = input.x # unknown arg for mocked func
+				}
+			`},
+			wantQueries: []string{"not data.partial.test.q with input.x as 1"},
+			wantSupport: []string{`
+				package partial.test
+
+				q { data.partial.test.mock_count([1], __local2__3); __local2__3 = input.x }
+				mock_count(__local0__4) = 100 { input.y = x_term_4_04; x_term_4_04 }
+				mock_count(__local1__5) = 101 { input.z = x_term_5_05; x_term_5_05 }
+			`},
+		},
+		{
+			note:  "with+function+negation: when replacement defs have unknowns, save negated expr with replacement",
+			query: "data.test.p = true",
+			modules: []string{`
+				package test
+				my_count(x) = count(x)
+				mock_count(_) = 100 { input.y }
+				mock_count(_) = 101 { input.z }
+				p {
+					not q with input.x as 1 with my_count as mock_count
+				}
+
+				q {
+					my_count([1]) = input.x # unknown arg for mocked func
+				}
+			`},
+			wantQueries: []string{"not data.partial.test.q with input.x as 1"},
+			wantSupport: []string{`
+				package partial.test
+
+				q { data.partial.test.mock_count([1], __local4__3); __local4__3 = input.x }
+				mock_count(__local1__4) = 100 { input.y = x_term_4_04; x_term_4_04 }
+				mock_count(__local2__5) = 101 { input.z = x_term_5_05; x_term_5_05 }
+			`},
+		},
+		{
 			note:  "save: sub path",
 			query: "input.x = 1; input.y = 2; input.z.a = 3; input.z.b = x",
 			input: `{"x": 1, "z": {"b": 4}}`,
@@ -1481,6 +1825,100 @@ func TestTopDownPartialEval(t *testing.T) {
 					),
 				),
 			},
+		},
+		{
+			note:  "copy propagation: circular reference (bug 3559)",
+			query: "data.test.p",
+			modules: []string{`package test
+				p {
+					q[_]
+				}
+				q[x] {
+					x = input[x]
+				}`,
+			},
+			wantQueries: []string{`x_term_1_01; x_term_1_01 = input[x_term_1_01]`},
+		},
+		{
+			note:  "copy propagation: circular reference (bug 3071)",
+			query: "data.test.p",
+			modules: []string{`package test
+				p[y] {
+					s := { i | input[i] }
+					s & set() != s
+					y := sprintf("%v", [s])
+				}`,
+			},
+			wantQueries: []string{`data.partial.test.p`},
+			wantSupport: []string{`package partial.test
+				p[__local1__1] { __local0__1 = {i1 | input[i1]}; neq(and(__local0__1, set()), __local0__1); sprintf("%v", [__local0__1], __local1__1) }
+			`},
+		},
+		{
+			note:        "copy propagation: tautology in query, input ref",
+			query:       "input.a == input.a",
+			wantQueries: []string{`__localq1__ = input.a`},
+		},
+		{
+			note:        "copy propagation: tautology in query, var ref, var is input",
+			query:       "x := input; x.a == x.a",
+			wantQueries: []string{`__localq2__ = input.a`},
+		},
+		{
+			note:  "copy propagation: tautology, input ref",
+			query: "data.test.p",
+			modules: []string{`package test
+				p {
+					input.a == input.a
+				}`,
+			},
+			wantQueries: []string{`__localcp0__ = input.a`},
+		},
+		{
+			note:  "copy propagation: tautology, var ref, ref is input",
+			query: "data.test.p",
+			modules: []string{`package test
+				p {
+					x := input
+					x.a == x.a
+				}`,
+			},
+			wantQueries: []string{`__localcp0__ = input.a`},
+		},
+		{
+			note:     "copy propagation: tautology, var ref, ref is unknown data",
+			query:    "data.test.p",
+			unknowns: []string{"data.bar.foo"},
+			modules: []string{`package test
+				p {
+					data.bar.foo.a == data.bar.foo.a
+				}`,
+			},
+			wantQueries: []string{`__localcp0__ = data.bar.foo.a`},
+		},
+		{
+			note: "copy propagation: tautology, var ref, ref is input, via unknown",
+			// NOTE(sr): If we were having unkowns: [input.foo] and the rule body was
+			// input.a == input.a, we'd never reach copy-propagation -- partial eval would
+			// have failed before.
+			query:    "data.test.p",
+			unknowns: []string{"input"},
+			modules: []string{`package test
+				p {
+					input.foo.a == input.foo.a
+				}`,
+			},
+			wantQueries: []string{`__localcp0__ = input.foo.a`},
+		},
+		{
+			note:  "copy propagation: tautology, var ref, ref is head var",
+			query: "data.test.p(input)",
+			modules: []string{`package test
+				p(x) {
+					x.a == x.a
+				}`,
+			},
+			wantQueries: []string{`__localcp1__ = input.a`},
 		},
 		{
 			note:  "save set vars are namespaced",
@@ -2641,7 +3079,12 @@ func TestTopDownPartialEval(t *testing.T) {
 					x = true
 				}`,
 			},
-			wantQueries: []string{"a1 = input.foo1; b1 = input.foo2; c1 = input.foo3; d1 = input.foo4; e1 = input.foo5"},
+			wantQueries: []string{`
+				e1 = input.foo5
+				d1 = input.foo4
+				c1 = input.foo3
+				b1 = input.foo2
+				a1 = input.foo1`},
 		},
 		{
 			note:  "partial object rules not memoized",
@@ -2711,32 +3154,171 @@ func TestTopDownPartialEval(t *testing.T) {
 			skipPartialNamespace: true,
 		},
 		{
-			note:  "copypropagation: circular reference (bug 3559)",
+			note:  "every: empty domain, no unknowns",
 			query: "data.test.p",
 			modules: []string{`package test
 				p {
-					q[_]
-				}
-				q[x] {
-					x = input[x]
-				}`,
-			},
-			wantQueries: []string{`x_term_1_01; x_term_1_01 = input[x_term_1_01]`},
+					every x in [] { x }
+				}`},
+			wantQueries: []string{``},
 		},
 		{
-			note:  "copypropagation: circular reference (bug 3071)",
+			note:  "every: no unknowns",
 			query: "data.test.p",
 			modules: []string{`package test
-				p[y] {
-					s := { i | input[i] }
-					s & set() != s
-					y := sprintf("%v", [s])
-				}`,
-			},
-			wantQueries: []string{`data.partial.test.p`},
-			wantSupport: []string{`package partial.test
-				p[__local1__1] { __local0__1 = {i1 | input[i1]}; neq(and(__local0__1, set()), __local0__1); sprintf("%v", [__local0__1], __local1__1) }
-			`},
+				p {
+					every x in [1, 2, 3] { x != 4 }
+				}`},
+			wantQueries: []string{``},
+		},
+		{
+			note:  "every: empty domain, unknowns in body",
+			query: "data.test.p",
+			modules: []string{`package test
+				p {
+					every x in [] { x > input }
+				}`},
+			wantQueries: []string{`every __local0__1, __local1__1 in [] {
+				__local3__1 = input
+				__local1__1 > __local3__1
+			}`},
+		},
+		{
+			note:  "every: known domain, unknowns in body",
+			query: "data.test.p",
+			modules: []string{`package test
+				p {
+					every x in [1, 2, 3] { x > input }
+				}`},
+			wantQueries: []string{`every __local0__1, __local1__1 in [1, 2, 3] {
+				__local3__1 = input
+				__local1__1 > __local3__1
+			}`},
+		},
+		{
+			note:  "every: known domain, unknowns in body (with call+assignment)",
+			query: "data.test.p",
+			modules: []string{`package test
+				p {
+					every x in [1, 2, 3] { y := x+10; y > input }
+				}`},
+			wantQueries: []string{`every __local0__1, __local1__1 in [1, 2, 3] {
+				plus(__local1__1, 10, __local4__1)
+				__local2__1 = __local4__1
+				__local5__1 = input
+				__local2__1 > __local5__1
+			}`},
+		},
+		{
+			note:  "every: known domain, unknowns in body, body impossible",
+			query: "data.test.p",
+			modules: []string{`package test
+				p {
+					every x in [1, 2, 3] { false; x > input }
+				}`},
+			wantQueries: []string{`every __local0__1, __local1__1 in [1, 2, 3] {
+				false
+				__local3__1 = input
+				__local1__1 > __local3__1
+			}`},
+		},
+		{
+			note:  "every: unknown domain",
+			query: "data.test.p",
+			modules: []string{`package test
+				p {
+					every x in input { x > 1 }
+				}`},
+			wantQueries: []string{`every __local0__1, __local1__1 in input { __local1__1 > 1 }`},
+		},
+		{
+			note:  "every: in-scope var in body",
+			query: "data.test.p",
+			modules: []string{`package test
+				p {
+					y := 3
+					every x in [1, 2] { x != 0; input > y }
+				}`},
+			wantQueries: []string{`every __local1__1, __local2__1 in [1, 2] { __local2__1 != 0; __local4__1 = input; __local4__1 > 3 }`},
+		},
+		{
+			note:  "every: unknown domain, call in body",
+			query: "data.test.p",
+			modules: []string{`package test
+				p {
+					every x in input {
+						y = concat(",", [x])
+					}
+				}`},
+			wantQueries: []string{`every __local0__1, __local1__1 in input { concat(",", [__local1__1], __local3__1); y1 = __local3__1 }`},
+		},
+		{
+			note:  "every: closing over function args",
+			query: "data.test.p",
+			modules: []string{`package test
+				p {
+					f(input)
+				}
+				f(x) {
+					every y in [1] {
+						a = x
+						1 == y
+					}
+				}`},
+			wantQueries: []string{`every __local1__2, __local2__2 in [1] { a2 = input; 1 = __local2__2 }`},
+		},
+		{
+			note:  "every: nested and closing over function args",
+			query: "data.test.p",
+			modules: []string{`package test
+				p {
+					f(input)
+				}
+				f(x) {
+					every y in [1] {
+						every z in [2] {
+							a = x
+							z > y
+						}
+					}
+				}`},
+			wantQueries: []string{`every __local1__2, __local2__2 in [1] {
+				__local6__2 = [2]
+				every __local3__2, __local4__2 in __local6__2 {
+					a2 = input; __local4__2 > __local2__2 }
+				}`},
+		},
+		{ // https://github.com/open-policy-agent/opa/issues/5367
+			note:  "copypropagation: keep equations that are only found in comprehensions, inlined function call",
+			query: "data.test.p",
+			modules: []string{`package test
+			key_exists(obj, k) { x = obj[k] }
+			
+			p {
+				key_exists(input, "foo")
+				{ true | input.foo }
+			}`},
+			wantQueries: []string{`{true | input.foo} = x_term_1_21; x_term_1_21; x2 = input.foo`},
+		},
+		{ // condensed form of the test above
+			note:  "copypropagation: keep equations that are only found in comprehensions",
+			query: "data.test.p",
+			modules: []string{`package test
+			p {
+				x = input.foo
+				{ true | input.foo }
+			}`},
+			wantQueries: []string{`{true | input.foo} = x_term_1_11; x_term_1_11; x1 = input.foo`},
+		},
+		{
+			note:  "copypropagation: keep equations that are only found in 'every' body",
+			query: "data.test.p",
+			modules: []string{`package test
+			p {
+				x = input.foo
+				every y in input.ys { y = input.foo }
+			}`},
+			wantQueries: []string{`every __local0__1, __local1__1 in input.ys { __local1__1 = input.foo }; x1 = input.foo`},
 		},
 	}
 
@@ -2744,11 +3326,12 @@ func TestTopDownPartialEval(t *testing.T) {
 
 	for _, tc := range tests {
 		params := fixtureParams{
-			note:    tc.note,
-			query:   tc.query,
-			modules: tc.modules,
-			data:    tc.data,
-			input:   tc.input,
+			note:       tc.note,
+			query:      tc.query,
+			modules:    tc.modules,
+			moduleASTs: tc.moduleASTs,
+			data:       tc.data,
+			input:      tc.input,
 		}
 		prepareTest(ctx, t, params, func(ctx context.Context, t *testing.T, f fixture) {
 
@@ -2798,12 +3381,13 @@ func TestTopDownPartialEval(t *testing.T) {
 
 			var expectedQueries []ast.Body
 
+			opts := ast.ParserOptions{AllFutureKeywords: true}
 			if len(tc.wantQueryASTs) > 0 {
 				expectedQueries = tc.wantQueryASTs
 			} else {
 				expectedQueries = make([]ast.Body, len(tc.wantQueries))
 				for i := range tc.wantQueries {
-					expectedQueries[i] = ast.MustParseBody(tc.wantQueries[i])
+					expectedQueries[i] = ast.MustParseBodyWithOpts(tc.wantQueries[i], opts)
 				}
 			}
 
@@ -2814,9 +3398,13 @@ func TestTopDownPartialEval(t *testing.T) {
 				t.Errorf("Partial evaluation results differ. Expected %d queries but got %d queries:\nMissing:\n%v\nExtra:\n%v", len(queriesB), len(queriesA), missing, extra)
 			}
 
-			expectedSupport := make([]*ast.Module, len(tc.wantSupport))
-			for i := range tc.wantSupport {
-				expectedSupport[i] = ast.MustParseModule(tc.wantSupport[i])
+			var expectedSupport []*ast.Module
+			if len(tc.wantSupportASTs) > 0 {
+				expectedSupport = tc.wantSupportASTs
+			} else {
+				for i := range tc.wantSupport {
+					expectedSupport = append(expectedSupport, ast.MustParseModule(tc.wantSupport[i]))
+				}
 			}
 			supportA, supportB := moduleSet(support), moduleSet(expectedSupport)
 			if !supportA.Equal(supportB) {
@@ -2829,11 +3417,12 @@ func TestTopDownPartialEval(t *testing.T) {
 }
 
 type fixtureParams struct {
-	note    string
-	data    string
-	modules []string
-	query   string
-	input   string
+	note       string
+	data       string
+	modules    []string
+	moduleASTs []*ast.Module
+	query      string
+	input      string
 }
 
 type fixture struct {
@@ -2861,9 +3450,16 @@ func prepareTest(ctx context.Context, t *testing.T, params fixtureParams, f func
 
 			compiler := ast.NewCompiler()
 			modules := map[string]*ast.Module{}
+			opts := ast.ParserOptions{AllFutureKeywords: true}
 
+			if len(params.moduleASTs) > 0 {
+				for i, module := range params.moduleASTs {
+					modules[fmt.Sprint(i)] = module
+				}
+			}
 			for i, module := range params.modules {
-				modules[fmt.Sprint(i)] = ast.MustParseModule(module)
+				j := len(params.moduleASTs) + i
+				modules[fmt.Sprint(j)] = ast.MustParseModuleWithOpts(module, opts)
 			}
 
 			if compiler.Compile(modules); compiler.Failed() {

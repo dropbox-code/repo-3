@@ -165,7 +165,12 @@ func Compare(a, b interface{}) int {
 	case *Array:
 		b := b.(*Array)
 		return termSliceCompare(a.elems, b.elems)
+	case *lazyObj:
+		return Compare(a.force(), b)
 	case *object:
+		if x, ok := b.(*lazyObj); ok {
+			b = x.force()
+		}
 		b := b.(*object)
 		return a.Compare(b)
 	case Set:
@@ -200,6 +205,9 @@ func Compare(a, b interface{}) int {
 		return a.Compare(b)
 	case *SomeDecl:
 		b := b.(*SomeDecl)
+		return a.Compare(b)
+	case *Every:
+		b := b.(*Every)
 		return a.Compare(b)
 	case *With:
 		b := b.(*With)
@@ -272,6 +280,8 @@ func sortOrder(x interface{}) int {
 		return 100
 	case *SomeDecl:
 		return 101
+	case *Every:
+		return 102
 	case *With:
 		return 110
 	case *Head:

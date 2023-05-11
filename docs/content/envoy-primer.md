@@ -14,36 +14,37 @@ Let's start with an example policy that restricts access to an endpoint based on
 
 ```live:bool_example:module:openable
 package envoy.authz
+import future.keywords
 
 import input.attributes.request.http
 
-default allow = false
+default allow := false
 
-allow {
+allow if {
     is_token_valid
     action_allowed
 }
 
-is_token_valid {
+is_token_valid if {
     token.valid
     now := time.now_ns() / 1000000000
     token.payload.nbf <= now
     now < token.payload.exp
 }
 
-action_allowed {
+action_allowed if {
     http.method == "GET"
     token.payload.role == "guest"
     glob.match("/people/*", ["/"], http.path)
 }
 
-action_allowed {
+action_allowed if {
     http.method == "GET"
     token.payload.role == "admin"
     glob.match("/people/*", ["/"], http.path)
 }
 
-action_allowed {
+action_allowed if {
     http.method == "POST"
     token.payload.role == "admin"
     glob.match("/people", ["/"], http.path)
@@ -51,7 +52,7 @@ action_allowed {
 }
 
 
-token := {"valid": valid, "payload": payload} {
+token := {"valid": valid, "payload": payload} if {
     [_, encoded] := split(http.headers.authorization, " ")
     [valid, _, payload] := io.jwt.decode_verify(encoded, {"secret": "secret"})
 }
@@ -97,34 +98,81 @@ With the input value above, the answer is:
 ```live:bool_example:output
 ```
 
-### Example Policy with Object Response
+## Example Policy with Additional Controls
 
-The `allow` rule in the above policy returns a `boolean` decision to indicate whether a request should be allowed or not.
-If you'd like your rule to not only indicate if a request is allowed or not but also provide optional response headers,
-body and HTTP status that can be sent to the downstream client or upstream, the below `allow` rule generates an `object`
-that provides additional details along with the status of the request (ie. `allowed` or `denied`).
+The `allow` variable in the above policy returns a `boolean` decision to indicate whether a request should be allowed or not.
+If you want, you can also control the HTTP status sent to the upstream or downstream client, along with the response body, and the response headers.  To do that, you can write rules like the ones below to fill in values for variables with the following types:
+
+* `headers` is an object whose keys are strings and values are strings. In case the request is denied, the object represents the HTTP response headers to be sent to the downstream client. If the request is allowed, the object represents additional request headers to be sent to the upstream.
+* `response_headers_to_add` is an object whose keys are strings and values are strings. It defines the HTTP response headers to be sent to the downstream client when a request is allowed.
+* `request_headers_to_remove` is an array of strings which describes the HTTP headers to remove from the original request before dispatching it to the upstream when a request is allowed.
+* `body` is a string which represents the response body data sent to the downstream client when a request is denied.
+* `status_code` is a number which represents the HTTP response status code sent to the downstream client when a request is denied.
 
 ```live:obj_example:module:openable
 package envoy.authz
+import future.keywords
 
-default allow = {
-    "allowed": false,
-    "headers": {"x-ext-auth-allow": "no"},
-    "body": "Unauthorized Request",
-    "http_status": 301
+import input.attributes.request.http
+
+default allow := false
+
+allow if {
+    is_token_valid
+    action_allowed
 }
 
-allow = response {
-    input.attributes.request.http.method == "GET"
-    response := {
-        "allowed": true,
-        "headers": {"x-ext-auth-allow": "yes"}
-    }
+headers["x-ext-auth-allow"] := "yes"
+headers["x-validated-by"] := "security-checkpoint"
+
+request_headers_to_remove := ["one-auth-header", "another-auth-header"]
+
+response_headers_to_add["x-foo"] := "bar"
+
+status_code := 200 if {
+  allow
+} else := 401 {
+  not is_token_valid
+} else := 403
+
+body := "Authentication Failed" if status_code == 401
+body := "Unauthorized Request"  if status_code == 403
+
+is_token_valid if {
+    token.valid
+    now := time.now_ns() / 1000000000
+    token.payload.nbf <= now
+    now < token.payload.exp
+}
+
+action_allowed if {
+    http.method == "GET"
+    token.payload.role == "guest"
+    glob.match("/people/*", ["/"], http.path)
+}
+
+action_allowed if {
+    http.method == "GET"
+    token.payload.role == "admin"
+    glob.match("/people/*", ["/"], http.path)
+}
+
+action_allowed if {
+    http.method == "POST"
+    token.payload.role == "admin"
+    glob.match("/people", ["/"], http.path)
+    lower(input.parsed_body.firstname) != base64url.decode(token.payload.sub)
+}
+
+
+token := {"valid": valid, "payload": payload} if {
+    [_, encoded] := split(http.headers.authorization, " ")
+    [valid, _, payload] := io.jwt.decode_verify(encoded, {"secret": "secret"})
 }
 ```
 
 ```live:obj_example:query:hidden
-data.envoy.authz.allow
+data.envoy.authz
 ```
 
 Sample input received by OPA is shown below:
@@ -145,12 +193,36 @@ Sample input received by OPA is shown below:
 }
 ```
 
-With the input value above, the answer is:
+With the input value above, the value of all the variables in the package are:
 
 ```live:obj_example:output
 ```
 
-### Input Document
+## Output Document
+
+When Envoy receives a policy decision, it expects a JSON object with the following fields:
+* `allowed` (required): a boolean deciding whether or not the request is allowed
+* `headers` (optional): an object mapping a string header name to a string header value (e.g. key "x-ext-auth-allow" has value "yes")
+* `response_headers_to_add` (optional): an object mapping a string header name to a string header value
+* `request_headers_to_remove` (optional): is an array of string header names
+* `http_status` (optional): a number representing the HTTP status code
+* `body` (optional): the response body
+
+To construct that output object using the policies demonstrated in the last section, you can use the following Rego snippet.  Notice that we are using partial object rules so that any variables with undefined values simply have no key in the `result` object.
+
+```rego
+result["allowed"] := allow
+result["headers"] := headers
+result["response_headers_to_add"] := response_headers_to_add
+result["request_headers_to_remove"] := request_headers_to_remove
+result["body"] := body
+result["http_status"] := status_code
+```
+
+For a single user, including this snippet in your normal policy is fine, but when you have multiple teams writing policies, you will typically pull this bit of boilerplate into a wrapper package, so your teams can focus on writing the policies shown in the previous sections.
+
+
+## Input Document
 
 In OPA, `input` is a reserved, global variable whose value is the request sent by the Envoy External Authorization filter
 to OPA. The OPA-Envoy plugin supports both [v2](https://www.envoyproxy.io/docs/envoy/latest/api-v2/service/auth/v2/external_auth.proto#service-auth-v2-checkrequest)
@@ -231,9 +303,9 @@ http_filters:
         target_uri: "127.0.0.1:9191"
 ```
 
-#### Example Input
+### Example Input
 
-<details><summary>Example v3 Input</summary>
+{{<detail-tag "Example v3 Input">}}
 ```json
 {
   "attributes": {
@@ -289,9 +361,9 @@ http_filters:
   }
 }
 ```
-</details>
+{{</detail-tag>}}
 
-<details><summary>Example v2 Input</summary>
+{{<detail-tag "Example v2 Input">}}
 ```json
 {
   "attributes":{
@@ -353,7 +425,7 @@ http_filters:
   }
 }
 ```
-</details>
+{{</detail-tag>}}
 
 The `parsed_path` field in the input is generated from the `path` field in the HTTP request which is included in the
 Envoy External Authorization `CheckRequest` message type. This field provides the request path as a string array which
@@ -362,12 +434,11 @@ access the path `/people`.
 
 ```live:parsed_path_example:module:read_only
 package envoy.authz
+import future.keywords
 
-default allow = false
+default allow := false
 
-allow {
-    input.parsed_path == ["people"]
-}
+allow if input.parsed_path == ["people"]
 ```
 
 The `parsed_query` field in the input is also generated from the `path` field in the HTTP request. This field provides
@@ -376,10 +447,11 @@ the HTTP URL query as a map of string array. The below sample policy allows anyo
 
 ```live:parsed_query_example:module:read_only
 package envoy.authz
+import future.keywords
 
-default allow = false
+default allow := false
 
-allow {
+allow if {
     input.parsed_path == ["people"]
     input.parsed_query.lang == ["en"]
     input.parsed_query.id == ["1", "2"]
@@ -392,10 +464,11 @@ can then be used in a policy as shown below.
 
 ```live:parsed_body_example:module:read_only
 package envoy.authz
+import future.keywords
 
-default allow = false
+default allow := false
 
-allow {
+allow if {
     input.parsed_body.firstname == "Charlie"
     input.parsed_body.lastname == "Opa"
 }
@@ -403,6 +476,9 @@ allow {
 
 The `truncated_body` field in the input represents if the HTTP request body is truncated. The body is considered to be
 truncated, if the value of the `Content-Length` header exceeds the size of the request body.
+
+If `skip-request-body-parse: true` is specified in the OPA-Envoy [configuration](../envoy-introduction#configuration), then
+the `parsed_body` and `truncated_body` fields will be omitted from the input.
 
 ## Example with JWT payload passed from Envoy
 

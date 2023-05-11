@@ -6,7 +6,10 @@ package loader
 
 import (
 	"bytes"
+	"embed"
+	"encoding/json"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -529,6 +532,7 @@ func TestLoadRooted(t *testing.T) {
 		paths[0] = "one.two:" + paths[0]
 		paths[1] = "three:" + paths[1]
 		paths[2] = "four:" + paths[2]
+		t.Log(paths)
 		loaded, err := NewFileLoader().All(paths)
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
@@ -540,6 +544,88 @@ func TestLoadRooted(t *testing.T) {
 			t.Fatalf("Expected %v but got: %v", expected, loaded.Documents)
 		}
 	})
+}
+
+//go:embed internal/embedtest
+var embedTestFS embed.FS
+
+func TestLoadFS(t *testing.T) {
+	paths := []string{
+		"four:foo.json",
+		"one.two:bar",
+		"three:baz",
+	}
+
+	fsys, err := fs.Sub(embedTestFS, "internal/embedtest")
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	loaded, err := NewFileLoader().WithFS(fsys).All(paths)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	expectedRegoBytes, err := fs.ReadFile(fsys, "bar/bar.rego")
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	expectedRego := ast.MustParseModule(string(expectedRegoBytes))
+	moduleFile := "bar/bar.rego"
+	if !expectedRego.Equal(loaded.Modules[moduleFile].Parsed) {
+		t.Fatalf(
+			"Expected:\n%v\n\nGot:\n%v",
+			expectedRego,
+			loaded.Modules[moduleFile],
+		)
+	}
+
+	expected := parseJSON(`
+	{"four": [1,2,3], "one": {"two": "abc"}, "three": {"qux": null}}
+	`)
+	if !reflect.DeepEqual(loaded.Documents, expected) {
+		t.Fatalf("Expected %v but got: %v", expected, loaded.Documents)
+	}
+}
+
+func TestLoadWithJSONOptions(t *testing.T) {
+	paths := []string{
+		"four:foo.json",
+		"one.two:bar",
+		"three:baz",
+	}
+
+	fsys, err := fs.Sub(embedTestFS, "internal/embedtest")
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	// load the file with JSON options set to include location data
+	loaded, err := NewFileLoader().WithFS(fsys).WithJSONOptions(&ast.JSONOptions{
+		MarshalOptions: ast.JSONMarshalOptions{
+			IncludeLocation: ast.NodeToggle{
+				Package: true,
+			},
+		},
+	}).All(paths)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	mod, ok := loaded.Modules["bar/bar.rego"]
+	if !ok {
+		t.Fatalf("Expected bar/bar.rego to be loaded")
+	}
+
+	bs, err := json.Marshal(mod.Parsed.Package)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	exp := `{"location":{"file":"bar/bar.rego","row":1,"col":1},"path":[{"type":"var","value":"data"},{"type":"string","value":"bar"}]}`
+	if string(bs) != exp {
+		t.Fatalf("Expected %v but got: %v", exp, string(bs))
+	}
 }
 
 func TestGlobExcludeName(t *testing.T) {

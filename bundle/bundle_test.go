@@ -10,15 +10,14 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
-
-	"github.com/pkg/errors"
+	"testing/fstest"
 
 	"github.com/open-policy-agent/opa/ast"
 	"github.com/open-policy-agent/opa/internal/file/archive"
@@ -84,11 +83,15 @@ func TestManifestEqual(t *testing.T) {
 }
 
 func TestRead(t *testing.T) {
-	testReadBundle(t, "")
+	for _, useMemoryFS := range []bool{false, true} {
+		testReadBundle(t, "", useMemoryFS)
+	}
 }
 
 func TestReadWithBaseDir(t *testing.T) {
-	testReadBundle(t, "/foo/bar")
+	for _, useMemoryFS := range []bool{false, true} {
+		testReadBundle(t, "/foo/bar", useMemoryFS)
+	}
 }
 
 func TestReadWithSizeLimit(t *testing.T) {
@@ -101,7 +104,7 @@ func TestReadWithSizeLimit(t *testing.T) {
 	br := NewCustomReader(loader).WithSizeLimitBytes(4)
 
 	_, err := br.Read()
-	if err == nil || err.Error() != "bundle file exceeded max size (4 bytes)" {
+	if err == nil || err.Error() != "bundle file 'data.json' exceeded max size (4 bytes)" {
 		t.Fatal("expected error but got:", err)
 	}
 
@@ -113,14 +116,61 @@ func TestReadWithSizeLimit(t *testing.T) {
 	br = NewCustomReader(loader).WithSizeLimitBytes(4)
 
 	_, err = br.Read()
-	if err == nil || err.Error() != "bundle signatures file exceeded max size (4 bytes)" {
+	if err == nil || err.Error() != "bundle file '.signatures.json' exceeded max size (4 bytes)" {
 		t.Fatal("expected error but got:", err)
 	}
-
 }
 
-func testReadBundle(t *testing.T, baseDir string) {
+func TestReadBundleInLazyMode(t *testing.T) {
+	files := [][2]string{
+		{"/a/b/c/data.json", "[1,2,3]"},
+		{"/a/b/d/data.json", "true"},
+		{"/a/b/y/data.yaml", `foo: 1`},
+		{"/example/example.rego", `package example`},
+		{"/data.json", `{"x": {"y": true}, "a": {"b": {"z": true}}}}`},
+		{"/.manifest", `{"revision": "foo", "roots": ["example"]}`}, // data is outside roots but validation skipped in lazy mode
+	}
+
+	buf := archive.MustWriteTarGz(files)
+	loader := NewTarballLoaderWithBaseURL(buf, "")
+	br := NewCustomReader(loader).WithLazyLoadingMode(true)
+
+	bundle, err := br.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(bundle.Data) != 0 {
+		t.Fatal("expected the bundle object to contain no data")
+	}
+
+	if len(bundle.Raw) == 0 {
+		t.Fatal("raw bundle bytes not set on bundle object")
+	}
+}
+
+func TestReadWithBundleEtag(t *testing.T) {
+
+	files := [][2]string{
+		{"/.manifest", `{"revision": "quickbrownfaux"}`},
+	}
+
+	buf := archive.MustWriteTarGz(files)
+	bundle, err := NewReader(buf).WithBundleEtag("foo").Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if bundle.Etag != "foo" {
+		t.Fatalf("Expected bundle etag foo but got %v\n", bundle.Etag)
+	}
+}
+
+func testReadBundle(t *testing.T, baseDir string, useMemoryFS bool) {
 	module := `package example`
+	if useMemoryFS && baseDir == "" {
+		baseDir = "."
+	}
 
 	modulePath := "/example/example.rego"
 	if baseDir != "" {
@@ -142,6 +192,7 @@ func testReadBundle(t *testing.T, baseDir string) {
 		{"/a/b/c/data.json", "[1,2,3]"},
 		{"/a/b/d/data.json", "true"},
 		{"/a/b/y/data.yaml", `foo: 1`},
+		{"/a/b/g/data.yml", "1"},
 		{"/example/example.rego", `package example`},
 		{"/policy.wasm", `legacy-wasm-module`},
 		{wasmResolverPath, `wasm-module`},
@@ -150,7 +201,18 @@ func testReadBundle(t *testing.T, baseDir string) {
 	}
 
 	buf := archive.MustWriteTarGz(files)
-	loader := NewTarballLoaderWithBaseURL(buf, baseDir)
+	var loader DirectoryLoader
+	if useMemoryFS {
+		fsys := make(fstest.MapFS, 1)
+		fsys["test.tar"] = &fstest.MapFile{Data: buf.Bytes()}
+		fh, err := fsys.Open("test.tar")
+		if err != nil {
+			t.Fatalf("Unexpected error: %s", err)
+		}
+		loader = NewTarballLoaderWithBaseURL(fh, baseDir)
+	} else {
+		loader = NewTarballLoaderWithBaseURL(buf, baseDir)
+	}
 	br := NewCustomReader(loader).WithBaseDir(baseDir)
 
 	bundle, err := br.Read()
@@ -174,6 +236,7 @@ func testReadBundle(t *testing.T, baseDir string) {
 				"b": map[string]interface{}{
 					"c": []interface{}{json.Number("1"), json.Number("2"), json.Number("3")},
 					"d": true,
+					"g": json.Number("1"),
 					"y": map[string]interface{}{
 						"foo": json.Number("1"),
 					},
@@ -418,6 +481,103 @@ func TestReadWithSignaturesWithBaseDir(t *testing.T) {
 	}
 }
 
+func TestReadWithPatch(t *testing.T) {
+	files := [][2]string{
+		{"/.manifest", `{"revision": "quickbrownfaux",  "roots": ["a"]}`},
+		{"/patch.json", `{"data": [{"op": "add", "path": "/a/b/d", "value": "foo"}, {"op": "remove", "path": "a/b/c"}]}`},
+	}
+
+	buf := archive.MustWriteTarGz(files)
+
+	loader := NewTarballLoaderWithBaseURL(buf, "/foo/bar")
+	reader := NewCustomReader(loader).WithBaseDir("/foo/bar")
+	b, err := reader.Read()
+	if err != nil {
+		t.Fatalf("Unexpected error %v", err)
+	}
+
+	actual := b.Type()
+	if actual != DeltaBundleType {
+		t.Fatalf("Expected delta bundle but got %v", actual)
+	}
+
+	if len(b.Patch.Data) != 2 {
+		t.Fatalf("Expected two patch operations but got %v", len(b.Patch.Data))
+	}
+
+	p1 := PatchOperation{
+		Op:    "add",
+		Path:  "/a/b/d",
+		Value: "foo",
+	}
+
+	p2 := PatchOperation{
+		Op:   "remove",
+		Path: "a/b/c",
+	}
+
+	expected := Patch{Data: []PatchOperation{p1, p2}}
+
+	if !reflect.DeepEqual(b.Patch.Data, expected.Data) {
+		t.Fatalf("Expected patch %v but got %v", expected.Data, b.Patch.Data)
+	}
+}
+
+func TestReadWithPatchExtraFiles(t *testing.T) {
+	cases := []struct {
+		note  string
+		files [][2]string
+		err   string
+	}{
+		{
+			note: "extra data file",
+			files: [][2]string{
+				{"/.manifest", `{"revision": "quickbrownfaux",  "roots": ["a"]}`},
+				{"/patch.json", `{"data": [{"op": "add", "path": "/a/b/d", "value": "foo"}, {"op": "remove", "path": "a/b/c"}]}`},
+				{"/a/b/c/data.json", "[1,2,3]"},
+			},
+			err: "delta bundle expected to contain only patch file but data files found",
+		},
+		{
+			note: "extra policy file",
+			files: [][2]string{
+				{"/.manifest", `{"revision": "quickbrownfaux",  "roots": ["a"]}`},
+				{"/patch.json", `{"data": [{"op": "add", "path": "/a/b/d", "value": "foo"}, {"op": "remove", "path": "a/b/c"}]}`},
+				{"/http/policy/policy.rego", `package example`},
+			},
+			err: "delta bundle expected to contain only patch file but policy files found",
+		},
+		{
+			note: "extra wasm file",
+			files: [][2]string{
+				{"/.manifest", `{"revision": "quickbrownfaux",  "roots": ["a"]}`},
+				{"/patch.json", `{"data": [{"op": "add", "path": "/a/b/d", "value": "foo"}, {"op": "remove", "path": "a/b/c"}]}`},
+				{"/policy.wasm", `modules-compiled-as-wasm-binary`},
+			},
+			err: "delta bundle expected to contain only patch file but wasm files found",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.note, func(t *testing.T) {
+			buf := archive.MustWriteTarGz(tc.files)
+			loader := NewTarballLoaderWithBaseURL(buf, "/foo/bar")
+			reader := NewCustomReader(loader).WithBaseDir("/foo/bar")
+			_, err := reader.Read()
+			if tc.err == "" && err != nil {
+				t.Fatal("Unexpected error occurred:", err)
+			} else if tc.err != "" && err == nil {
+				t.Fatal("Expected error but got success")
+			} else if tc.err != "" && err != nil {
+				if tc.err != err.Error() {
+					t.Fatalf("Expected error to contain %q but got: %v", tc.err, err)
+				}
+			}
+		})
+	}
+
+}
+
 func TestReadWithSignaturesExtraFiles(t *testing.T) {
 	signedTokenHS256 := `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImZvbyJ9.eyJmaWxlcyI6W3sibmFtZSI6Ii5tYW5pZmVzdCIsImhhc2giOiI1MDdhMmMzOGExNDQxZGI1OGQyY2I4Nzk4MmM0MmFhOTFhNDM0MmVmNDIyYTZiNTQyZWRkZWJlZWY2ZjA0MTJmIiwiYWxnb3JpdGhtIjoiU0hBLTI1NiJ9LHsibmFtZSI6ImEvYi9jL2RhdGEuanNvbiIsImhhc2giOiI0MmNmZTY3NjhiNTdiYjVmNzUwM2MxNjVjMjhkZDA3YWM1YjgxMzU1NGViYzg1MGYyY2MzNTg0M2U3MTM3YjFkIiwiYWxnb3JpdGhtIjoiU0hBLTI1NiJ9LHsibmFtZSI6Imh0dHAvcG9saWN5L3BvbGljeS5yZWdvIiwiaGFzaCI6ImE2MTVlZWFlZTIxZGU1MTc5ZGUwODBkZThjMzA1MmM4ZGE5MDExMzg0MDZiYTcxYzM4YzAzMjg0NWY3ZDU0ZjQiLCJhbGdvcml0aG0iOiJTSEEtMjU2In1dLCJpYXQiOjE1OTIyNDgwMjcsImlzcyI6IkpXVFNlcnZpY2UiLCJzY29wZSI6IndyaXRlIn0.Vmm9UDiInUnXXlk-OOjiCy3rR7EVvXS-OFst1rbh3Zo`
 
@@ -635,6 +795,14 @@ func TestReadRootValidation(t *testing.T) {
 			},
 			err: "manifest roots [a b c/d] do not permit data at path '/c/e'",
 		},
+		{
+			note: "err data patch outside scope",
+			files: [][2]string{
+				{"/.manifest", `{"revision": "abcd", "roots": ["a", "b", "c/d"]}`},
+				{"/patch.json", `{"data": [{"op": "add", "path": "/a/b/d", "value": "foo"}, {"op": "remove", "path": "/c/e"}]}`},
+			},
+			err: "manifest roots [a b c/d] do not permit data patch at path 'c/e'",
+		},
 	}
 
 	for _, tc := range cases {
@@ -851,7 +1019,9 @@ func TestRoundtrip(t *testing.T) {
 			},
 		},
 		Manifest: Manifest{
+			Roots:    &[]string{""},
 			Revision: "quickbrownfaux",
+			Metadata: map[string]interface{}{"version": "v1", "hello": "world"},
 		},
 	}
 
@@ -878,6 +1048,77 @@ func TestRoundtrip(t *testing.T) {
 
 	if !reflect.DeepEqual(bundle2.Signatures, bundle.Signatures) {
 		t.Fatal("Expected signatures to be same")
+	}
+}
+
+func TestRoundtripWithPlanModules(t *testing.T) {
+
+	b := Bundle{
+		Data: map[string]interface{}{},
+		PlanModules: []PlanModuleFile{
+			{
+				URL:  "/plan.json",
+				Path: "/plan.json",
+				Raw:  []byte(`{"foo": 7}`), // NOTE(tsandall): contents are ignored
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := Write(&buf, b); err != nil {
+		t.Fatal(err)
+	}
+
+	b2, err := NewReader(&buf).Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(b2.PlanModules) != 1 ||
+		b2.PlanModules[0].Path != b.PlanModules[0].Path ||
+		b2.PlanModules[0].URL != b.PlanModules[0].URL ||
+		!bytes.Equal(b2.PlanModules[0].Raw, b.PlanModules[0].Raw) {
+		t.Fatalf("expected %+v but got %+v", b, b2)
+	}
+}
+
+func TestRoundtripDeltaBundle(t *testing.T) {
+
+	// replace a value
+	p1 := PatchOperation{
+		Op:    "replace",
+		Path:  "a/baz",
+		Value: "bux",
+	}
+
+	// add a new object member
+	p2 := PatchOperation{
+		Op:    "add",
+		Path:  "/a/foo",
+		Value: []string{"hello", "world"},
+	}
+
+	bundle := Bundle{
+		Patch: Patch{Data: []PatchOperation{p1, p2}},
+		Manifest: Manifest{
+			Revision: "delta",
+			Roots:    &[]string{"a"},
+		},
+	}
+
+	var buf bytes.Buffer
+
+	if err := NewWriter(&buf).Write(bundle); err != nil {
+		t.Fatal("Unexpected error:", err)
+	}
+
+	bundle2, err := NewReader(&buf).Read()
+	if err != nil {
+		t.Fatal("Unexpected error:", err)
+	}
+
+	if !bundle2.Equal(bundle) {
+		t.Fatal("Exp:", bundle, "\n\nGot:", bundle2)
 	}
 }
 
@@ -1141,18 +1382,29 @@ func TestHashBundleFiles(t *testing.T) {
 		data     map[string]interface{}
 		manifest Manifest
 		wasm     []byte
+		plan     []byte
 		exp      int
 	}{
-		"no_content":                 {map[string]interface{}{}, Manifest{}, []byte{}, 2},
-		"data":                       {map[string]interface{}{"foo": "bar"}, Manifest{}, []byte{}, 2},
-		"data_and_manifest":          {map[string]interface{}{"foo": "bar"}, Manifest{Revision: "quickbrownfaux"}, []byte{}, 2},
-		"data_and_manifest_and_wasm": {map[string]interface{}{"foo": "bar"}, Manifest{Revision: "quickbrownfaux"}, []byte("modules-compiled-as-wasm-binary"), 3},
+		"no_content":                 {map[string]interface{}{}, Manifest{}, nil, nil, 1},
+		"data":                       {map[string]interface{}{"foo": "bar"}, Manifest{}, nil, nil, 1},
+		"data_and_manifest":          {map[string]interface{}{"foo": "bar"}, Manifest{Revision: "quickbrownfaux"}, []byte{}, nil, 2},
+		"data_and_manifest_and_wasm": {map[string]interface{}{"foo": "bar"}, Manifest{Revision: "quickbrownfaux"}, []byte("modules-compiled-as-wasm-binary"), nil, 3},
+		"data_and_plan":              {map[string]interface{}{"foo": "bar"}, Manifest{Revision: "quickbrownfaux"}, nil, []byte("not a plan but good enough"), 3},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 
-			f, err := hashBundleFiles(h, &Bundle{Data: tc.data, Manifest: tc.manifest, Wasm: tc.wasm})
+			var plans []PlanModuleFile
+			if len(tc.plan) > 0 {
+				plans = append(plans, PlanModuleFile{
+					URL:  "/plan.json",
+					Path: "/plan.json",
+					Raw:  tc.plan,
+				})
+			}
+
+			f, err := hashBundleFiles(h, &Bundle{Data: tc.data, Manifest: tc.manifest, Wasm: tc.wasm, PlanModules: plans})
 			if err != nil {
 				t.Fatal("Unexpected error:", err)
 			}
@@ -1375,6 +1627,7 @@ func TestMerge(t *testing.T) {
 						"bar",
 					},
 				},
+				Data: map[string]interface{}{},
 			},
 		},
 		{
@@ -1432,6 +1685,7 @@ func TestMerge(t *testing.T) {
 						Raw:         []byte("not really wasm, but good enough"),
 					},
 				},
+				Data: map[string]interface{}{},
 			},
 		},
 		{
@@ -1485,6 +1739,7 @@ func TestMerge(t *testing.T) {
 						Raw:    []byte("package baz"),
 					},
 				},
+				Data: map[string]interface{}{},
 			},
 		},
 		{
@@ -1525,6 +1780,83 @@ func TestMerge(t *testing.T) {
 						"bar": "val1",
 					},
 					"baz": "val2",
+				},
+			},
+		},
+		{
+			note: "merge empty data",
+			bundles: []*Bundle{
+				{
+					Manifest: Manifest{
+						Roots: &[]string{
+							"foo/bar",
+						},
+					},
+					Data: map[string]interface{}{},
+				},
+				{
+					Manifest: Manifest{
+						Roots: &[]string{
+							"baz",
+						},
+					},
+					Data: map[string]interface{}{},
+				},
+			},
+			wantBundle: &Bundle{
+				Manifest: Manifest{
+					Roots: &[]string{
+						"foo/bar",
+						"baz",
+					},
+				},
+				Data: map[string]interface{}{},
+			},
+		},
+		{
+			note: "merge plans",
+			bundles: []*Bundle{
+				{
+					Manifest: Manifest{
+						Roots: &[]string{"a"},
+					},
+					PlanModules: []PlanModuleFile{
+						{
+							URL:  "a/plan.json",
+							Path: "a/plan.json",
+							Raw:  []byte("not a real plan but good enough"),
+						},
+					},
+				},
+				{
+					Manifest: Manifest{
+						Roots: &[]string{"b"},
+					},
+					PlanModules: []PlanModuleFile{
+						{
+							URL:  "b/plan.json",
+							Path: "b/plan.json",
+							Raw:  []byte("not a real plan but good enough"),
+						},
+					},
+				},
+			},
+			wantBundle: &Bundle{
+				Data: map[string]interface{}{},
+				Manifest: Manifest{
+					Roots: &[]string{"a", "b"},
+				},
+				PlanModules: []PlanModuleFile{
+					{
+						URL:  "a/plan.json",
+						Path: "a/plan.json",
+						Raw:  []byte("not a real plan but good enough"),
+					},
+					{
+						URL:  "b/plan.json",
+						Path: "b/plan.json",
+						Raw:  []byte("not a real plan but good enough"),
+					},
 				},
 			},
 		},

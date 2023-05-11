@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path"
 	"path/filepath"
@@ -29,7 +28,7 @@ import (
 
 	"github.com/open-policy-agent/opa/ast"
 	"github.com/open-policy-agent/opa/storage"
-	"github.com/open-policy-agent/opa/storage/inmem"
+	inmem "github.com/open-policy-agent/opa/storage/inmem/test"
 	"github.com/open-policy-agent/opa/types"
 	"github.com/open-policy-agent/opa/util"
 )
@@ -171,6 +170,7 @@ func TestTopDownUnsupportedBuiltin(t *testing.T) {
 	compiler := ast.NewCompiler()
 	store := inmem.New()
 	txn := storage.NewTransactionOrDie(ctx, store)
+	defer store.Abort(ctx, txn)
 	q := NewQuery(body).WithCompiler(compiler).WithStore(store).WithTransaction(txn)
 	_, err := q.Run(ctx)
 
@@ -220,12 +220,107 @@ func TestTopDownQueryCancellation(t *testing.T) {
 		cancel.Cancel()
 		close(done)
 	}()
-	<-done
 
 	qrs, err := query.Run(ctx)
 	if err == nil || err.(*Error).Code != CancelErr {
 		t.Errorf("Expected cancel error but got: %v (err: %v)", qrs, err)
 		PrettyTrace(os.Stdout, []*Event(*buf))
+	}
+
+	<-done
+}
+
+func TestTopDownQueryCancellationEvery(t *testing.T) {
+	ctx := context.Background()
+
+	module := func(ev ast.Every, extra ...interface{}) *ast.Module {
+		t.Helper()
+		m := ast.MustParseModule(`package test
+	p { true }`)
+		m.Rules[0].Body = ast.NewBody(ast.NewExpr(&ev))
+		return m
+	}
+
+	tests := []struct {
+		note   string
+		module *ast.Module
+	}{
+		{
+			note: "large domain, simple body",
+			module: module(ast.Every{ // every x in data.arr { ... }
+				Value:  ast.VarTerm("x"),
+				Domain: ast.RefTerm(ast.VarTerm("data"), ast.StringTerm("arr")),
+				Body:   ast.MustParseBody(`print(x); test.sleep("10ms")`),
+			}),
+		},
+		{
+			note: "simple domain, long evaluation time in body",
+			module: module(ast.Every{ // every x in [999] { ... }
+				Value:  ast.VarTerm("x"),
+				Domain: ast.MustParseTerm(`[999]`),
+				Body:   ast.MustParseBody(`data.arr[_] = y; test.sleep("10ms"); print(y); x == y`),
+			}),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.note, func(t *testing.T) {
+			compiler := ast.NewCompiler().WithEnablePrintStatements(true)
+			compiler.Compile(map[string]*ast.Module{"test.rego": tc.module})
+			if compiler.Failed() {
+				t.Fatalf("compiler: %v", compiler.Errors)
+			}
+
+			arr := make([]interface{}, 1000)
+			for i := 0; i < 1000; i++ {
+				arr[i] = i
+			}
+			data := map[string]interface{}{
+				"arr": arr,
+			}
+
+			store := inmem.NewFromObject(data)
+			txn := storage.NewTransactionOrDie(ctx, store)
+			cancel := NewCancel()
+			buf := bytes.Buffer{}
+			tr := NewBufferTracer()
+			ph := NewPrintHook(&buf)
+			query := NewQuery(ast.MustParseBody("data.test.p")).
+				WithCompiler(compiler).
+				WithStore(store).
+				WithTransaction(txn).
+				WithCancel(cancel).
+				WithTracer(tr).
+				WithPrintHook(ph)
+
+			done := make(chan struct{})
+			go func() {
+				time.Sleep(time.Millisecond * 500)
+				cancel.Cancel()
+				close(done)
+			}()
+
+			qrs, err := query.Run(ctx)
+			if err == nil || err.(*Error).Code != CancelErr {
+				t.Errorf("Expected cancel error but got: %v (err: %v)", qrs, err)
+			}
+
+			notes := strings.Split(buf.String(), "\n")
+			notes = notes[:len(notes)-1] // last one is empty-string because each line ends in "\n"
+			if len(notes) == 0 {
+				t.Errorf("expected prints, got nothing")
+			}
+			if len(notes) == len(arr) {
+				t.Errorf("expected less than %d prints, got %d", len(arr), len(notes))
+			}
+			t.Logf("got %d notes", len(notes))
+
+			if t.Failed() && testing.Verbose() {
+				PrettyTrace(os.Stdout, []*Event(*tr))
+			}
+
+			<-done
+		})
 	}
 }
 
@@ -494,6 +589,163 @@ func TestTopDownEarlyExit(t *testing.T) {
 	}
 }
 
+func TestTopDownEvery(t *testing.T) {
+	n := func(ns ...string) []string { return ns }
+
+	tests := []struct {
+		note   string
+		module string
+		notes  []string // expected note events, let's see if these are useful
+		fail   bool
+	}{
+		{
+			note: "domain empty",
+			module: `package test
+				p { every x in [] { print(x) } }
+			`,
+			notes: n(),
+		},
+		{
+			note: "domain undefined",
+			module: `package test
+				p { every x in input { print(x) } }
+			`,
+			fail: true,
+		},
+		{
+			note: "domain is call",
+			module: `package test
+				p {
+					d := numbers.range(1, 5)
+					every x in d { x >= 1; print(x) }
+				}`,
+			notes: n("1", "2", "3", "4", "5"),
+		},
+		{
+			note: "simple value",
+			module: `package test
+				p {
+					every x in [1, 2] { print(x) }
+				}`,
+			notes: n("1", "2"),
+		},
+		{
+			note: "simple key+value",
+			module: `package test
+				p {
+					every k, v in [1, 2] { k < v; print(v) }
+				}`,
+			notes: n("1", "2"),
+		},
+		{
+			note: "outer bindings",
+			module: `package test
+				p {
+					i = "outer"
+					every x in [1, 2] { print(x); print(i) }
+				}`,
+			notes: n("1", "outer", "2", "outer"),
+		},
+		{
+			note: "simple failure, last",
+			module: `package test
+				p {
+					every x in [1, 2] { x < 2; print(x) }
+				}`,
+			notes: n("1"),
+			fail:  true,
+		},
+		{
+			note: "simple failure, first",
+			module: `package test
+				p {
+					every x in [1, 2] { x > 1; print(x) }
+				}`,
+			notes: n(),
+			fail:  true,
+		},
+		{
+			note: "early exit in body eval on success",
+			module: `package test
+				p {
+					every x in [1, 2] { y := [false, true, true][_]; print(x); y }
+				}`,
+			notes: n("1", "1", "2", "2"), // Would be triples if EE in the body didn't work
+		},
+		{
+			note: "early exit suppressed in body eval",
+			module: `package test
+				q { print("q") }
+				p {
+					every x in [1, 2] { q; print(x) }
+				}`,
+			notes: n("q", "1", "2"), // Would be only "1" if the EE of q wasn't surppressed
+		},
+		{
+			note: "with: domain",
+			module: `package test
+				p {
+					every x in input { print(x) } with input as [1]
+				}`,
+			notes: n("1"),
+		},
+		{
+			note: "with: body",
+			module: `package test
+				p {
+					every x in [1, 2] { print(x); print(input) } with input as "input"
+				}`,
+			notes: n("1", "input", "2", "input"),
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.note, func(t *testing.T) {
+			ctx := context.Background()
+			c := ast.NewCompiler().WithEnablePrintStatements(true)
+			mod := ast.MustParseModuleWithOpts(tc.module, ast.ParserOptions{FutureKeywords: []string{"every"}})
+			if c.Compile(map[string]*ast.Module{"test": mod}); c.Failed() {
+				t.Fatal(c.Errors)
+			}
+			if testing.Verbose() {
+				t.Log(c.Modules)
+			}
+			buf := bytes.Buffer{}
+			tr := NewBufferTracer()
+			ph := NewPrintHook(&buf)
+			query := NewQuery(ast.MustParseBody("data.test.p = x")).
+				WithCompiler(c).
+				WithPrintHook(ph).
+				WithTracer(tr)
+
+			res, err := query.Run(ctx)
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+			if !tc.fail {
+				if len(res) == 0 {
+					t.Errorf("unexpected failure, empty query result set")
+				}
+			} else {
+				if len(res) > 0 {
+					t.Errorf("unexpected results: %v, expected empty query result set", res)
+				}
+			}
+
+			notes := strings.Split(buf.String(), "\n")
+			notes = notes[:len(notes)-1] // last one is empty-string because each line ends in "\n"
+			if len(tc.notes) != 0 || len(tc.notes) == 0 && len(notes) != 0 {
+				if !reflect.DeepEqual(notes, tc.notes) {
+					t.Errorf("unexpected prints, expected %q, got %q", tc.notes, notes)
+				}
+			}
+
+			if t.Failed() || testing.Verbose() {
+				PrettyTrace(os.Stderr, *tr)
+			}
+		})
+	}
+}
+
 type contextPropagationMock struct{}
 
 // contextPropagationStore will accumulate values from the contexts provided to
@@ -506,15 +758,19 @@ type contextPropagationStore struct {
 	calls []interface{}
 }
 
-func (m *contextPropagationStore) NewTransaction(context.Context, ...storage.TransactionParams) (storage.Transaction, error) {
+func (*contextPropagationStore) NewTransaction(context.Context, ...storage.TransactionParams) (storage.Transaction, error) {
 	return nil, nil
 }
 
-func (m *contextPropagationStore) Commit(context.Context, storage.Transaction) error {
+func (*contextPropagationStore) Commit(context.Context, storage.Transaction) error {
 	return nil
 }
 
-func (m *contextPropagationStore) Abort(context.Context, storage.Transaction) {
+func (*contextPropagationStore) Abort(context.Context, storage.Transaction) {
+}
+
+func (*contextPropagationStore) Truncate(context.Context, storage.Transaction, storage.TransactionParams, storage.Iterator) error {
+	return nil
 }
 
 func (m *contextPropagationStore) Read(ctx context.Context, txn storage.Transaction, path storage.Path) (interface{}, error) {
@@ -573,6 +829,10 @@ func (*astStore) Commit(context.Context, storage.Transaction) error {
 
 func (*astStore) Abort(context.Context, storage.Transaction) {}
 
+func (*astStore) Truncate(context.Context, storage.Transaction, storage.TransactionParams, storage.Iterator) error {
+	return nil
+}
+
 func (a *astStore) Read(ctx context.Context, txn storage.Transaction, path storage.Path) (interface{}, error) {
 	if path.String() == a.path {
 		return a.value, nil
@@ -605,6 +865,68 @@ func TestTopdownStoreAST(t *testing.T) {
 
 	if err != nil || !result.Equal(exp) {
 		t.Fatalf("expected %v but got %v (error: %v)", exp, result, err)
+	}
+}
+
+func TestTopdownLazyObj(t *testing.T) {
+	body := ast.MustParseBody(`data.stored = x`)
+	ctx := context.Background()
+	compiler := ast.NewCompiler()
+	foo := map[string]interface{}{
+		"foo": "bar",
+	}
+	store := inmem.NewFromObject(map[string]interface{}{
+		"stored": foo,
+	})
+	txn := storage.NewTransactionOrDie(ctx, store)
+	defer store.Abort(ctx, txn)
+
+	q := NewQuery(body).WithCompiler(compiler).WithStore(store).WithTransaction(txn)
+	qrs, err := q.Run(ctx)
+	if err != nil {
+		t.Fatalf("expected no error got %v", err)
+	}
+	act, ok := qrs[0]["x"].Value.(ast.Object)
+	if !ok {
+		t.Errorf("expected obj, got %T: %[1]v", qrs[0]["x"].Value)
+	}
+	// NOTE(sr): we're using DeepEqual here because we want to assert that the structs
+	// match -- as far as the interface `ast.Object` is concerned `*lazyObj` and `*object`
+	// should be indistinguishable.
+	if exp := ast.LazyObject(foo); !reflect.DeepEqual(act, exp) {
+		t.Errorf("expected %T, got %T", exp, act)
+	}
+}
+
+func TestTopdownLazyObjOptOut(t *testing.T) {
+	body := ast.MustParseBody(`data.stored = x`)
+	ctx := context.Background()
+	compiler := ast.NewCompiler()
+	foo := map[string]interface{}{
+		"foo": "bar",
+	}
+	store := inmem.NewFromObject(map[string]interface{}{
+		"stored": foo,
+	})
+	txn := storage.NewTransactionOrDie(ctx, store)
+	defer store.Abort(ctx, txn)
+
+	q := NewQuery(body).WithCompiler(compiler).WithStore(store).WithTransaction(txn).WithStrictObjects(true)
+	qrs, err := q.Run(ctx)
+	if err != nil {
+		t.Fatalf("expected no error got %v", err)
+	}
+	act, ok := qrs[0]["x"].Value.(ast.Object)
+	if !ok {
+		t.Errorf("expected %T, got %T: %[2]v", act, qrs[0]["x"].Value)
+	}
+	// NOTE(sr): We can't type-assert *ast.lazyObj because it's not exported -- but we can retry
+	// the assertion that we've done in the not-opt-out case, and see that it no longer holds:
+	if exp := ast.LazyObject(foo); reflect.DeepEqual(act, exp) {
+		t.Errorf("expected %T, got %T", exp, act)
+	}
+	if exp := ast.NewObject(ast.Item(ast.StringTerm("foo"), ast.StringTerm("bar"))); exp.Compare(act) != 0 {
+		t.Errorf("expected %v to be equal to %v", exp, act)
 	}
 }
 
@@ -671,7 +993,6 @@ func compileRules(imports []string, input []string, modules []string) (*ast.Comp
 //
 // Avoid the following top-level keys: i, j, k, p, q, r, v, x, y, z.
 // These are used for rule names, local variables, etc.
-//
 func loadSmallTestData() map[string]interface{} {
 	var data map[string]interface{}
 	err := util.UnmarshalJSON([]byte(`{
@@ -737,6 +1058,20 @@ func loadSmallTestData() map[string]interface{} {
 func setTime(t time.Time) func(*Query) *Query {
 	return func(q *Query) *Query {
 		return q.WithTime(t)
+	}
+}
+
+func setInterQueryCache(c iCache.InterQueryCache) func(*Query) *Query {
+	return func(q *Query) *Query {
+		return q.WithInterQueryBuiltinCache(c)
+	}
+}
+
+func setAllowNet(a []string) func(*Query) *Query {
+	return func(q *Query) *Query {
+		c := q.compiler.Capabilities()
+		c.AllowNet = a
+		return q.WithCompiler(q.compiler.WithCapabilities(c))
 	}
 }
 
@@ -1005,10 +1340,10 @@ func init() {
 		),
 	})
 
-	RegisterFunctionalBuiltin1("test.sleep", func(a ast.Value) (ast.Value, error) {
-		d, _ := time.ParseDuration(string(a.(ast.String)))
+	RegisterBuiltinFunc("test.sleep", func(_ BuiltinContext, operands []*ast.Term, iter func(*ast.Term) error) error {
+		d, _ := time.ParseDuration(string(operands[0].Value.(ast.String)))
 		time.Sleep(d)
-		return ast.Null{}, nil
+		return iter(ast.NullTerm())
 	})
 
 }
@@ -1092,7 +1427,7 @@ func dump(note string, modules map[string]*ast.Module, data interface{}, docpath
 
 	filename := fmt.Sprintf("test-%v-%04d.yaml", namespace, c)
 
-	if err := ioutil.WriteFile(filepath.Join(dir, filename), bs, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, filename), bs, 0644); err != nil {
 		panic(err)
 	}
 

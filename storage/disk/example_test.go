@@ -7,9 +7,9 @@ package disk_test
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"os"
 
+	"github.com/open-policy-agent/opa/logging"
 	"github.com/open-policy-agent/opa/storage"
 	"github.com/open-policy-agent/opa/storage/disk"
 	"github.com/open-policy-agent/opa/util"
@@ -26,14 +26,14 @@ func Example_store() {
 	ctx := context.Background()
 
 	// Create a temporary directory for store.
-	dir, err := ioutil.TempDir("", "opa_disk_example")
+	dir, err := os.MkdirTemp("", "opa_disk_example")
 	check(err)
 
 	// Cleanup temporary directory after finishing.
 	defer os.RemoveAll(dir)
 
 	// Create a new disk-based store.
-	store, err := disk.New(ctx, disk.Options{
+	store, err := disk.New(ctx, logging.NewNoOpLogger(), nil, disk.Options{
 		Dir: dir,
 		Partitions: []storage.Path{
 			storage.MustParsePath("/authz/tenants"),
@@ -63,7 +63,7 @@ func Example_store() {
 	check(err)
 
 	// Re-create the disk-based store using the same options.
-	store2, err := disk.New(ctx, disk.Options{
+	store2, err := disk.New(ctx, logging.NewNoOpLogger(), nil, disk.Options{
 		Dir: dir,
 		Partitions: []storage.Path{
 			storage.MustParsePath("/authz/tenants"),
@@ -73,6 +73,9 @@ func Example_store() {
 
 	// Read value persisted above and inspect the result.
 	value, err := storage.ReadOne(ctx, store2, storage.MustParsePath("/authz/tenants/acmecorp.openpolicyagent.org"))
+	check(err)
+
+	err = store2.Close(ctx)
 	check(err)
 
 	fmt.Println(value)

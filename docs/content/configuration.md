@@ -69,6 +69,19 @@ keys:
 caching:
   inter_query_builtin_cache:
     max_size_bytes: 10000000
+
+distributed_tracing:
+  type: grpc
+  address: localhost:4317
+  service_name: opa
+  sample_percentage: 50
+  encryption: "off"
+
+server:
+  encoding:
+    gzip:
+        min_length: 1024,
+        compression_level: 9
 ```
 
 #### Environment Variable Substitution
@@ -81,7 +94,7 @@ Example using `BASE_URL` and `BEARER_TOKEN` environment variables:
 ```yaml
 services:
   acmecorp:
-    url: ${BASE_URL}
+    url: "${BASE_URL}"
     credentials:
       bearer:
         token: "${BEARER_TOKEN}"
@@ -183,6 +196,25 @@ Because the entire `0` index was overwritten.
 
 It is highly recommended to use objects/maps instead of lists for configuration for this reason.
 
+##### Remote Bundles Override Shorthand
+
+When running the server to quickly try a remote public bundle — such as those published from the
+[Rego Playground](https://play.openpolicyagent.org), you may find it convenient to provide the URL of the
+bundle directly, rather than via repeated `--set` flags:
+
+```shell
+opa run -s https://example.com/bundles/bundle.tar.gz
+```
+
+The above shorthand command is identical to:
+
+```shell
+opa run -s --set "services.cli1.url=https://example.com" \
+           --set "bundles.cli1.service=cli1" \
+           --set "bundles.cli1.resource=/bundles/bundle.tar.gz" \
+           --set "bundles.cli1.persist=true"
+```
+
 ###### Empty objects
 If you need to set an empty object with the CLI overrides, for example with plugin configuration like:
 
@@ -245,17 +277,61 @@ multiple services.
 | `services[_].tls.ca_cert` | `string` | No | The path to the root CA certificate.  If not provided, this defaults to TLS using the host's root CA set. |
 | `services[_].tls.system_ca_required` | `bool` | No (default: `false`) | Require system certificate appended with root CA certificate. |
 | `services[_].allow_insecure_tls` | `bool` | No | Allow insecure TLS. |
+| `services[_].type` | `string` | No (default: empty) | Optional parameter that allows to use an "OCI" service type. This will allow bundle and discovery plugins to download bundles from an OCI registry. |
+
+> Services can be defined as an array or object. When defined as an object, the
+> object keys override the `services[_].name` fields.
+> For example:
+> ```yaml
+> services:
+>   s1:
+>     url: https://s1/example/
+>   s2:
+>     url: https://s2/
+> ```
+> Is equivalent to
+> ```yaml
+> services:
+>   - name: s1
+>     url: https://s1/example/
+>   - name: s2
+>     url: https://s2/
+> ```
 
 Each service may optionally specify a credential mechanism by which OPA will authenticate
 itself to the service.
+
+##### Example
+
+Using an OCI service type to download a bundle from an OCI repository.
+
+```yaml
+services:
+  ghcr-registry:
+    url: https://ghcr.io
+    type: oci
+
+bundles:
+  authz:
+    service: ghcr-registry
+    resource: ghcr.io/${ORGANIZATION}/${REPOSITORY}:${TAG}
+    persist: true
+    polling:
+      min_delay_seconds: 60
+      max_delay_seconds: 120
+
+persistence_directory: ${PERSISTENCE_PATH}
+```
+
+When using an OCI service type the downloader uses the persistence path to store the layers of the downloaded repository. This storage path should be maintained by the user.
+If persistence is not configured the OCI downloader will store the layers in the system's temporary directory to allow automatic cleanup on system restart.
 
 #### Bearer Token
 
 OPA will authenticate using the specified bearer token and schema; to enable bearer token
 authentication, either the token or the path to the token must be specified. If the latter is provided, on each request OPA will re-read the token from the file and use that token for authentication.
 
-The schema is optional and will default to `Bearer`
-if unspecified.
+The `scheme` attribute is optional, and will default to `Bearer` if unspecified.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -286,6 +362,8 @@ Following successful authentication at the token endpoint the returned token wil
 | `services[_].credentials.oauth2.client_id` | `string` | Yes | The client ID to use for authentication. |
 | `services[_].credentials.oauth2.client_secret` | `string` | Yes | The client secret to use for authentication. |
 | `services[_].credentials.oauth2.scopes` | `[]string` | No | Optional list of scopes to request for the token. |
+| `services[_].credentials.oauth2.additional_headers` | `map` | No | Map of additional headers to send to token endpoint at the OAuth2 authorization server |
+| `services[_].credentials.oauth2.additional_parameters` | `map` | No | Map of additional body parameters to send token endpoint at the OAuth2 authorization server |
 
 #### OAuth2 Client Credentials JWT authentication
 
@@ -396,15 +474,18 @@ Consider requiring authentication in order to prevent unauthorized read access t
 
 #### AWS Signature
 
-OPA will authenticate with an [AWS4 HMAC](https://docs.aws.amazon.com/general/latest/gr/sigv4_signing.html) signature. Several methods of obtaining the
-necessary credentials are available; exactly one must be specified to use the AWS signature
-authentication method.
+OPA will authenticate with an [AWS Version 4](https://docs.aws.amazon.com/general/latest/gr/sigv4_signing.html) or version 4A signature. While version 4 is the default, version 4A must be used when making requests that might be handled by more than one region, such as an [S3 Multi-Region Access Point](https://docs.aws.amazon.com/AmazonS3/latest/userguide/MultiRegionAccessPoints.html). You must use version 4A for this or requests will fail when routed to a different region than the one indicated in a version 4 signature. Furthermore, using version 4a also requires that temporary credentials are retrieved from a [regional AWS STS endpoint](https://docs.aws.amazon.com/sdkref/latest/guide/feature-sts-regionalized-endpoints.html), rather than the global STS endpoint.
+
+Several methods of obtaining the necessary credentials are available; exactly one must be specified to use the AWS signature authentication method.
 
 The AWS service for which to sign the request can be specified in the `service` field. If omitted, the default is `s3`.
 
-| Field | Type | Required | Description |
-| --- | --- | --- | --- |
-| `services[_].credentials.s3_signing.service` | `string` | No | The AWS service to sign requests with, eg `execute-api` or `s3`. Default: `s3` |
+The AWS signature version to sign the request with can be specified in the `signature_version` field. If omitted, the default is `4`. The only other valid value is `4a`.
+
+| Field                                                  | Type | Required | Description                                                                    |
+|--------------------------------------------------------| --- | --- |--------------------------------------------------------------------------------|
+| `services[_].credentials.s3_signing.service`           | `string` | No | The AWS service to sign requests with, eg `execute-api` or `s3`. Default: `s3` |
+| `services[_].credentials.s3_signing.signature_version` | `string` | No | The AWS signature version to sign requests with, eg `4` or `4a`. Default: `4`  |
 
 ##### Using Static Environment Credentials
 If specifying `environment_credentials`, OPA will expect to find environment variables
@@ -417,7 +498,6 @@ Please note that if you are using temporary IAM credentials (e.g. assumed IAM ro
 | --- | --- | --- | --- |
 | `services[_].credentials.s3_signing.environment_credentials` | `{}` | Yes | Enables AWS signing using environment variables to source the configuration and credentials |
 
-
 ##### Using Named Profile Credentials
 If specifying `profile_credentials`, OPA will expect to find the `access key id`, `secret access key` and
 `session token` from the [named profiles](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-profiles.html)
@@ -428,7 +508,7 @@ request OPA will re-read the credentials from the file and use them for authenti
 | --- | --- | --- | --- |
 | `services[_].credentials.s3_signing.profile_credentials.path` | `string` | No | The path to the shared credentials file. If empty, OPA will look for the `AWS_SHARED_CREDENTIALS_FILE` env variable. If the variable is not set, the path defaults to the current user's home directory. `~/.aws/credentials` (Linux & Mac) or `%USERPROFILE%\.aws\credentials` (Windows) |
 | `services[_].credentials.s3_signing.profile_credentials.profile` | `string` | No | AWS Profile to extract credentials from the credentials file. If empty, OPA will look for the `AWS_PROFILE` env variable. If the variable is not set, the `default` profile will be used |
-| `services[_].credentials.s3_signing.metadata_credentials.aws_region` | `string` | No | The AWS region to use for the AWS signing service credential method. If unset, the `AWS_REGION` environment variable must be set |
+| `services[_].credentials.s3_signing.profile_credentials.aws_region` | `string` | No | The AWS region to use for the AWS signing service credential method. If unset, the `AWS_REGION` environment variable must be set |
 
 ##### Using EC2 Metadata Credentials
 If specifying `metadata_credentials`, OPA will use the AWS metadata services for [EC2](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/iam-roles-for-amazon-ec2.html)
@@ -441,9 +521,9 @@ be specified as `iam_role` and `aws_region` respectively.
 To use the ECS metadata service, specify only the AWS region for the resource as `aws_region`. ECS
 containers have at most one associated IAM role.
 
-**N.B.** Providing a value for `iam_role` will cause OPA to use the EC2 metadata service even
-if running inside an ECS container. This may result in unexpected problems if, for example,
-there is no route to the EC2 metadata service from inside the container or if the IAM role is only available within the container and not from the hosting EC2 instance.
+> Providing a value for `iam_role` will cause OPA to use the EC2 metadata service even
+> if running inside an ECS container. This may result in unexpected problems if, for example,
+> there is no route to the EC2 metadata service from inside the container or if the IAM role is only available within the container and not from the hosting EC2 instance.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -451,31 +531,12 @@ there is no route to the EC2 metadata service from inside the container or if th
 | `services[_].credentials.s3_signing.metadata_credentials.iam_role` | `string` | No | The IAM role to use for the AWS signing service credential method |
 
 ##### Using EKS IAM Roles for Service Account (Web Identity) Credentials
-If specifying `web_identity_credentials`, OPA will expect to find environment variables for `AWS_ROLE_ARN` and `AWS_WEB_IDENTITY_TOKEN_FILE`, in accordance with the convention used by the [AWS EKS IAM Roles for Service Accounts](https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts-technical-overview.html#pod-configuration).
+If specifying `web_identity_credentials`, OPA will expect to find environment variables for `AWS_ROLE_ARN` and `AWS_WEB_IDENTITY_TOKEN_FILE`, in accordance with the convention used by the [AWS EKS IAM Roles for Service Accounts](https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html).
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `services[_].credentials.s3_signing.web_identity_credentials.aws_region` | `string` | Yes | The AWS region to use for the sts regional endpoint. Uses the global endpoint by default |
 | `services[_].credentials.s3_signing.web_identity_credentials.session_name` | `string` | No | The session name used to identify the assumed role session. Default: `open-policy-agent` |
-
-> Services can be defined as an array or object. When defined as an object, the
-> object keys override the `services[_].name` fields.
-> For example:
-```yaml
-services:
-  s1:
-    url: https://s1/example/
-  s2:
-    url: https://s2/
-```
-Is equivalent to
-```yaml
-services:
-  - name: s1
-    url: https://s1/example/
-  - name: s2
-    url: https://s2/
-```
 
 #### GCP Metadata Token
 
@@ -538,8 +599,8 @@ bundles:
 
 #### Azure Managed Identities Token
 
-OPA will authenticate with an [Azure managed identities](https://docs.microsoft.com/en-us/azure/active-directory/managed-identities-azure-resources/overview) token. 
-The [token request](https://docs.microsoft.com/en-us/azure/active-directory/managed-identities-azure-resources/how-to-use-vm-token#get-a-token-using-http) 
+OPA will authenticate with an [Azure managed identities](https://docs.microsoft.com/en-us/azure/active-directory/managed-identities-azure-resources/overview) token.
+The [token request](https://docs.microsoft.com/en-us/azure/active-directory/managed-identities-azure-resources/how-to-use-vm-token#get-a-token-using-http)
 can be configured via the plugin to customize the base URL, API version, and resource. Specific managed identity IDs can be optionally provided as well.
 
 | Field | Type | Required | Description |
@@ -547,30 +608,30 @@ can be configured via the plugin to customize the base URL, API version, and res
 | `services[_].credentials.azure_managed_identity.endpoint` | `string` | No | Request endpoint. (default: `http://169.254.169.254/metadata/identity/oauth2/token`, the Azure Instance Metadata Service endpoint (recommended))|
 | `services[_].credentials.azure_managed_identity.api_version` | `string` | No | API version to use. (default: `2018-02-01`, the minimum version) |
 | `services[_].credentials.azure_managed_identity.resource` | `string` | No | App ID URI of the target resource. (default: `https://storage.azure.com/`) |
-| `services[_].credentials.azure_managed_identity.object_id` | `string` | No | Optional object ID of the managed identity you would like the token for. Required, if your VM has multiple user-assigned managed identites. |
-| `services[_].credentials.azure_managed_identity.client_id` | `string` | No | Optional client ID of the managed identity you would like the token for. Required, if your VM has multiple user-assigned managed identites. |
-| `services[_].credentials.azure_managed_identity.mi_res_id` | `string` | No | Optional Azure Resource ID of the managed identity you would like the token for. Required, if your VM has multiple user-assigned managed identites. |
+| `services[_].credentials.azure_managed_identity.object_id` | `string` | No | Optional object ID of the managed identity you would like the token for. Required, if your VM has multiple user-assigned managed identities. |
+| `services[_].credentials.azure_managed_identity.client_id` | `string` | No | Optional client ID of the managed identity you would like the token for. Required, if your VM has multiple user-assigned managed identities. |
+| `services[_].credentials.azure_managed_identity.mi_res_id` | `string` | No | Optional Azure Resource ID of the managed identity you would like the token for. Required, if your VM has multiple user-assigned managed identities. |
 
 ##### Example
 Use an [Azure storage account](https://docs.microsoft.com/en-us/azure/storage/common/storage-account-overview) as a bundle service backend.
 Note that the `x-ms-version` header must be specified for the storage account service, and a minimum version of `2017-11-09` must be provided as per [Azure documentation](https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-azure-active-directory#call-storage-operations-with-oauth-tokens).
 
 ```yaml
-services: 
-  azure_storage_account: 
+services:
+  azure_storage_account:
     url: ${STORAGE_ACCOUNT_URL}
     headers:
       x-ms-version: 2017-11-09
     response_header_timeout_seconds: 5
-    credentials: 
+    credentials:
       azure_managed_identity: {}
 
-bundles: 
-  authz: 
+bundles:
+  authz:
     service: azure_storage_account
     resource: bundles/http/example/authz.tar.gz
     persist: true
-    polling: 
+    polling:
       min_delay_seconds: 60
       max_delay_seconds: 120
 ```
@@ -676,6 +737,42 @@ func init() {
 
 ```
 
+### Using private image from OCI repositories
+
+When using a private image from an OCI registry you need to specify an authentication method. Supported authentication methods are listed in the [Services](#services) section. The Azure managed identity plugin
+is not supported at this point in time.
+
+Examples of setting credentials for pulling private images:
+*AWS ECR* private images usually require at least basic authentication. The credentials to authenticate can be obtained using the AWS CLI command `aws ecr get-login` and those can be passed to the service configuration as basic bearer credentials as follows:
+```yaml
+credentials:
+  bearer:
+    scheme: "Basic"
+    token: "<username>:<password>"
+```
+
+Other AWS authentication methods also work:
+```yaml
+credentials:
+  s3_signing:
+    service: "ecr"
+    metadata_credentials:
+      aws_region: us-east-1
+```
+
+Note, that the authentication method `s3_signing` does work for
+signing requests to other AWS services.
+
+A special case is that bearer authentication works differently to normal service authentication. The OCI downloader base64-encodes the credentials for you so that they need to be supplied in plain text.
+
+For *GHCR* (Github Container Registry) you can use a developer PAT (personal access token) when downloading a private image. These can be supplied as:
+```yaml
+credentials:
+  bearer:
+    scheme: "Bearer"
+    token: "<PAT>"
+```
+
 ### Miscellaneous
 
 | Field | Type | Required | Description |
@@ -685,6 +782,7 @@ func init() {
 | `default_authorization_decision` | `string` | No (default: `/system/authz/allow`) | Set path of default authorization decision for OPA's API. |
 | `persistence_directory` | `string` | No (default `$PWD/.opa`) | Set directory to use for persistence with options like `bundles[_].persist`. |
 | `plugins` | `object` | No (default: `{}`) | Location for custom plugin configuration. See [Plugins](../plugins) for details. |
+| `nd_builtin_cache` | `boolean` | No (default: `false`) | Enable the non-deterministic builtins caching system during policy evaluation, and include the contents of the cache in decision logs. Note that decision logs that are larger than `upload_size_limit_bytes` will drop the `nd_builtin_cache` key from the log entry before uploading. |
 
 ### Keys
 
@@ -743,6 +841,7 @@ included in the actual bundle gzipped tarball.
 | `bundles[_].polling.min_delay_seconds` | `int64` | No (default: `60`) | Minimum amount of time to wait between bundle downloads. |
 | `bundles[_].polling.max_delay_seconds` | `int64` | No (default: `120`) | Maximum amount of time to wait between bundle downloads. |
 | `bundles[_].trigger` | `string`  (default: `periodic`) | No | Controls how bundle is downloaded from the remote server. Allowed values are `periodic` and `manual`. |
+| `bundles[_].polling.long_polling_timeout_seconds` | `int64` | No | Maximum amount of time the server should wait before issuing a timeout if there's no update available. |
 | `bundles[_].persist` | `bool` | No | Persist activated bundles to disk. |
 | `bundles[_].signing.keyid` | `string` | No | Name of the key to use for bundle signature verification. |
 | `bundles[_].signing.scope` | `string` | No | Scope to use for bundle signature verification. |
@@ -756,6 +855,7 @@ included in the actual bundle gzipped tarball.
 | `status.service` | `string` | Yes | Name of service to use to contact remote server. |
 | `status.partition_name` | `string` | No | Path segment to include in status updates. |
 | `status.console` | `boolean` | No (default: `false`) | Log the status updates locally to the console. When enabled alongside a remote status update API the `service` must be configured, the default `service` selection will be disabled. |
+| `status.prometheus` | `boolean` | No (default: `false`) | Export the status (bundle and plugin) metrics to prometheus (see [the monitoring documentation](../monitoring/#prometheus)). When enabled alongside a remote status update API the `service` must be configured, the default `service` selection will be disabled. |
 | `status.plugin` | `string` | No | Use the named plugin for status updates. If this field exists, the other configuration fields are not required. |
 | `status.trigger` | `string`  (default: `periodic`) | No | Controls how status updates are reported to the remote server. Allowed values are `periodic` and `manual`. |
 
@@ -772,23 +872,26 @@ included in the actual bundle gzipped tarball.
 | `decision_logs.reporting.min_delay_seconds` | `int64` | No (default: `300`) | Minimum amount of time to wait between uploads. |
 | `decision_logs.reporting.max_delay_seconds` | `int64` | No (default: `600`) | Maximum amount of time to wait between uploads. |
 | `decision_logs.reporting.trigger` | `string` | No (default: `periodic`) | Controls how decision logs are reported to the remote server. Allowed values are `periodic` and `manual`. |
-| `decision_logs.mask_decision` | `string` | No (default: `system/log/mask`) | Set path of masking decision. |
+| `decision_logs.mask_decision` | `string` | No (default: `/system/log/mask`) | Set path of masking decision. |
+| `decision_logs.drop_decision` | `string` | No (default: `/system/log/drop`) | Set path of drop decision. |
 | `decision_logs.plugin` | `string` | No | Use the named plugin for decision logging. If this field exists, the other configuration fields are not required. |
 | `decision_logs.console` | `boolean` | No (default: `false`) | Log the decisions locally to the console. When enabled alongside a remote decision logging API the `service` must be configured, the default `service` selection will be disabled. |
 
 ### Discovery
 
-| Field | Type | Required | Description |
-| --- | --- | --- | --- |
-| `discovery.resource` | `string` | Yes | Resource path to use to download bundle from configured service. |
+| Field | Type | Required | Description                                                                                                                                                 |
+| --- | --- | --- |-------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `discovery.resource` | `string` | Yes | Resource path to use to download bundle from configured service.                                                                                            |
 | `discovery.service` | `string` | No | Name of the service to use to contact remote server. If omitted, the configuration must contain exactly one service. Discovery will default to this service. |
-| `discovery.decision` | `string` | No | The path of the decision to evaluate in the discovery bundle. By default, OPA will evaluate `data` in the discovery bundle to produce the configuration. |
-| `discovery.polling.min_delay_seconds` | `int64` | No (default: `60`) | Minimum amount of time to wait between configuration downloads. |
-| `discovery.polling.max_delay_seconds` | `int64` | No (default: `120`) | Maximum amount of time to wait between configuration downloads. |
-| `discovery.trigger` | `string`  (default: `periodic`) | No | Controls how bundle is downloaded from the remote server. Allowed values are `periodic` and `manual`. |
-| `discovery.signing.keyid` | `string` | No | Name of the key to use for bundle signature verification. |
-| `discovery.signing.scope` | `string` | No | Scope to use for bundle signature verification. |
-| `discovery.signing.exclude_files` | `array` | No | Files in the bundle to exclude during verification. |
+| `discovery.decision` | `string` | No | The path of the decision to evaluate in the discovery bundle. By default, OPA will evaluate `data` in the discovery bundle to produce the configuration.    |
+| `discovery.polling.min_delay_seconds` | `int64` | No (default: `60`) | Minimum amount of time to wait between configuration downloads.                                                                                             |
+| `discovery.polling.max_delay_seconds` | `int64` | No (default: `120`) | Maximum amount of time to wait between configuration downloads.                                                                                             |
+| `discovery.trigger` | `string`  (default: `periodic`) | No | Controls how bundle is downloaded from the remote server. Allowed values are `periodic` and `manual`.                                                       |
+| `discovery.polling.long_polling_timeout_seconds` | `int64` | No | Maximum amount of time the server should wait before issuing a timeout if there's no update available.                                                      |
+| `discovery.signing.keyid` | `string` | No | Name of the key to use for bundle signature verification.                                                                                                   |
+| `discovery.signing.scope` | `string` | No | Scope to use for bundle signature verification.                                                                                                             |
+| `discovery.signing.exclude_files` | `array` | No | Files in the bundle to exclude during verification.                                                                                                         |
+| `discovery.persist` | `bool` | No | Persist activated discovery bundle to disk.                                                                                                                 |
 
 > ⚠️ The plugin trigger mode configured on the discovery plugin will be inherited by the bundle, decision log
 > and status plugins. For example, if the discovery plugin is configured to use the manual trigger mode, all other
@@ -801,3 +904,54 @@ The following `discovery` configuration fields are supported but deprecated:
 | --- | --- | --- | --- |
 | `discovery.prefix` | `string` | No (default: `bundles`) | Deprecated: Use `resource` instead. Path prefix to use to download configuration from remote server. |
 | `discovery.name` | `string` | No | Deprecated: Use `resource` instead. Name of the discovery configuration to download. If `discovery.name` is specified and `discovery.resource` is unset, the `discovery.decision` field will default to the `discovery.name` value. |
+
+### Distributed tracing
+
+Distributed tracing represents the configuration of the OpenTelemetry Tracing.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `distributed_tracing.type` | `string` | No | Setting this to "grpc" enables distributed tracing with an collector gRPC endpoint |
+| `distributed_tracing.address` | `string` | No (default: `localhost:4317`) | Address of the OpenTelemetry Collector gRPC endpoint. |
+| `distributed_tracing.service_name` | `string` | No (default: `opa`) | Logical name of the service. |
+| `distributed_tracing.sample_percentage` | `int` | No (default: `100`) | Percentage of traces that are sampled and exported. |
+| `distributed_tracing.encryption` | `string` | No (default: `off`) | Configures TLS. |
+| `distributed_tracing.allow_insecure_tls` | `bool` | No (default: `false`) | Allow insecure TLS. |
+| `distributed_tracing.tls_ca_cert_file` | `string` | No | The path to the root CA certificate. |
+| `distributed_tracing.tls_cert_file` | `string` | No (unless `encryption` equals `mtls`) | The path to the client certificate to authenticate with. |
+| `distributed_tracing.tls_private_key_file` | `string` | No (unless `tls_cert_file` provided)  | The path to the private key of the client certificate. |
+
+The following encryption methods are supported:
+
+| Name | Description |
+| --- | --- |
+| `off` | Disable TLS |
+| `tls` | Enable TLS |
+| `mtls` | Enable mutual TLS |
+
+### Disk Storage
+
+The `storage` configuration key allows for enabling, and configuring, the
+persistent on-disk storage of an OPA instance.
+
+If `disk` is set to something, the server will enable the on-disk store
+with data put into the configured `directory`.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `storage.disk.directory` | `string` | Yes | This is the directory to use for storing the persistent database. |
+| `storage.disk.auto_create` | `bool` | No (default: `false`) | If set to true, the configured directory will be created if it does not exist. |
+| `storage.disk.partitions` | `array[string]` | No | Non-overlapping `data` prefixes used for partitioning the data on disk. |
+| `storage.disk.badger` | `string` | No (default: empty) | "Superflags" passed to Badger allowing to modify advanced options. |
+
+See [the docs on disk storage](../misc-disk/) for details about the settings.
+
+### Server
+
+The `server` configuration sets the gzip compression settings for `/v0/data`, `/v1/data` and `/v1/compile` HTTP `POST` endpoints
+The gzip compression settings are used when the client sends `Accept-Encoding: gzip`
+
+| Field                                    | Type  | Required            | Description                                                                                                                                                                                                                                  |
+|------------------------------------------|-------|---------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `server.encoding.gzip.min_length`        | `int` | No, (default: 1024) | Specifies the minimum length of the response to compress                                                                                                                                                                                     |
+| `server.encoding.gzip.compression_level` | `int` | No, (default: 9)    | Specifies the compression level. Accepted values: a value of either 0 (no compression), 1 (best speed, lowest compression) or 9 (slowest, best compression). See https://pkg.go.dev/compress/flate#pkg-constants |

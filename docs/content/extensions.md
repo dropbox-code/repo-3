@@ -107,6 +107,7 @@ r := rego.New(
 			Name: "github.repo",
 			Decl: types.NewFunction(types.Args(types.S, types.S), types.A),
 			Memoize: true,
+			Nondeterministic: true,
 		},
 		func(bctx rego.BuiltinContext, a, b *ast.Term) (*ast.Term, error) {
 			// see implementation below.
@@ -132,6 +133,13 @@ across multiple calls in the same query. If your built-in function performs I/O,
 you should enable memoization as it ensures function evaluation is
 deterministic.
 
+Since this built-in could have non-deterministic results, depending on network
+conditions, the declaration also sets `rego.Function#Nondeterministic` to true.
+This provides basic safety information to the runtime, so that the function
+isn't accidentally run during bundle builds or partial evaluation. If your
+builtin can have non-deterministic results, you should mark it appropriately
+to avoid surprises.
+
 The implementation wraps the Go standard library to perform HTTP requests to
 GitHub's API:
 
@@ -141,7 +149,7 @@ func(bctx rego.BuiltinContext, a, b *ast.Term) (*ast.Term, error) {
 
 	if err := ast.As(a.Value, &org); err != nil {
 		return nil, err
-	} else if ast.As(b.Value, &repo); err != nil {
+	} else if err := ast.As(b.Value, &repo); err != nil {
 		return nil, err
 	}
 
@@ -405,6 +413,7 @@ func main() {
 				Name:    "github.repo",
 				Decl:    types.NewFunction(types.Args(types.S, types.S), types.A),
 				Memoize: true,
+				Nondeterministic: true,
 			},
 			func(bctx rego.BuiltinContext, a, b *ast.Term) (*ast.Term, error) {
 
@@ -412,7 +421,7 @@ func main() {
 
 				if err := ast.As(a.Value, &org); err != nil {
 					return nil, err
-				} else if ast.As(b.Value, &repo); err != nil {
+				} else if err := ast.As(b.Value, &repo); err != nil {
 					return nil, err
 				}
 
@@ -478,6 +487,7 @@ func main() {
 			Name:    "github.repo",
 			Decl:    types.NewFunction(types.Args(types.S, types.S), types.A),
 			Memoize: true,
+			Nondeterministic: true,
 		},
 		func(bctx rego.BuiltinContext, a, b *ast.Term) (*ast.Term, error) {
 
@@ -485,7 +495,7 @@ func main() {
 
 			if err := ast.As(a.Value, &org); err != nil {
 				return nil, err
-			} else if ast.As(b.Value, &repo); err != nil {
+			} else if err := ast.As(b.Value, &repo); err != nil {
 				return nil, err
 			}
 

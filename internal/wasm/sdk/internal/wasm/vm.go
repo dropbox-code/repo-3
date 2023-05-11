@@ -14,13 +14,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bytecodealliance/wasmtime-go"
+	wasmtime "github.com/bytecodealliance/wasmtime-go/v3"
 
 	"github.com/open-policy-agent/opa/ast"
 	sdk_errors "github.com/open-policy-agent/opa/internal/wasm/sdk/opa/errors"
 	"github.com/open-policy-agent/opa/internal/wasm/util"
 	"github.com/open-policy-agent/opa/metrics"
 	"github.com/open-policy-agent/opa/topdown"
+	"github.com/open-policy-agent/opa/topdown/builtins"
 	"github.com/open-policy-agent/opa/topdown/cache"
 	"github.com/open-policy-agent/opa/topdown/print"
 )
@@ -31,7 +32,6 @@ type VM struct {
 	engine               *wasmtime.Engine
 	store                *wasmtime.Store
 	instance             *wasmtime.Instance // Pointer to avoid unintented destruction (triggering finalizers within).
-	intHandle            *wasmtime.InterruptHandle
 	policy               []byte
 	abiMajorVersion      int32
 	abiMinorVersion      int32
@@ -59,6 +59,10 @@ type VM struct {
 	free                 func(context.Context, int32) error
 	valueAddPath         func(context.Context, int32, int32, int32) (int32, error)
 	valueRemovePath      func(context.Context, int32, int32) (int32, error)
+	valueFree            func(context.Context, int32) error
+	heapBlocksStash      func(context.Context) error
+	heapBlocksRestore    func(context.Context) error
+	heapStashClear       func(context.Context) error
 }
 
 type vmOpts struct {
@@ -74,6 +78,7 @@ func newVM(opts vmOpts, engine *wasmtime.Engine) (*VM, error) {
 	ctx := context.Background()
 	v := &VM{engine: engine}
 	store := wasmtime.NewStore(engine)
+	store.SetEpochDeadline(1)
 	memorytype := wasmtime.NewMemoryType(opts.memoryMin, true, opts.memoryMax)
 	memory, err := wasmtime.NewMemory(store, memorytype)
 	if err != nil {
@@ -101,16 +106,12 @@ func newVM(opts vmOpts, engine *wasmtime.Engine) (*VM, error) {
 	if err != nil {
 		return nil, err
 	}
-	v.intHandle, err = store.InterruptHandle()
-	if err != nil {
-		return nil, fmt.Errorf("get interrupt handle: %w", err)
-	}
 
 	v.abiMajorVersion, v.abiMinorVersion, err = getABIVersion(i, store)
 	if err != nil {
 		return nil, fmt.Errorf("invalid module: %w", err)
 	}
-	if v.abiMajorVersion != int32(1) || (v.abiMinorVersion != int32(1) && v.abiMinorVersion != int32(2)) {
+	if v.abiMajorVersion != int32(1) || (v.abiMinorVersion != int32(1) && v.abiMinorVersion != int32(3)) {
 		return nil, fmt.Errorf("invalid module: unsupported ABI version: %d.%d", v.abiMajorVersion, v.abiMinorVersion)
 	}
 
@@ -157,6 +158,18 @@ func newVM(opts vmOpts, engine *wasmtime.Engine) (*VM, error) {
 	}
 	v.valueRemovePath = func(ctx context.Context, a int32, b int32) (int32, error) {
 		return call(ctx, v, "opa_value_remove_path", a, b)
+	}
+	v.valueFree = func(ctx context.Context, a int32) error {
+		return callVoid(ctx, v, "opa_value_free", a)
+	}
+	v.heapBlocksStash = func(ctx context.Context) error {
+		return callVoid(ctx, v, "opa_heap_blocks_stash")
+	}
+	v.heapBlocksRestore = func(ctx context.Context) error {
+		return callVoid(ctx, v, "opa_heap_blocks_restore")
+	}
+	v.heapStashClear = func(ctx context.Context) error {
+		return callVoid(ctx, v, "opa_heap_stash_clear")
 	}
 
 	// Initialize the heap.
@@ -275,9 +288,11 @@ func (i *VM) Eval(ctx context.Context,
 	seed io.Reader,
 	ns time.Time,
 	iqbCache cache.InterQueryCache,
-	ph print.Hook) ([]byte, error) {
+	ndbCache builtins.NDBCache,
+	ph print.Hook,
+	capabilities *ast.Capabilities) ([]byte, error) {
 	if i.abiMinorVersion < int32(2) {
-		return i.evalCompat(ctx, entrypoint, input, metrics, seed, ns, iqbCache, ph)
+		return i.evalCompat(ctx, entrypoint, input, metrics, seed, ns, iqbCache, ndbCache, ph, capabilities)
 	}
 
 	metrics.Timer("wasm_vm_eval").Start()
@@ -328,10 +343,10 @@ func (i *VM) Eval(ctx context.Context,
 	// make use of it (e.g. `http.send`); and it will spawn a go routine
 	// cancelling the builtins that use topdown.Cancel, when the context is
 	// cancelled.
-	i.dispatcher.Reset(ctx, seed, ns, iqbCache, ph)
+	i.dispatcher.Reset(ctx, seed, ns, iqbCache, ndbCache, ph, capabilities)
 
 	metrics.Timer("wasm_vm_eval_call").Start()
-	resultAddr, err := i.evalOneOff(ctx, int32(entrypoint), i.dataAddr, inputAddr, inputLen, heapPtr)
+	resultAddr, err := i.evalOneOff(ctx, entrypoint, i.dataAddr, inputAddr, inputLen, heapPtr)
 	if err != nil {
 		return nil, err
 	}
@@ -357,7 +372,9 @@ func (i *VM) evalCompat(ctx context.Context,
 	seed io.Reader,
 	ns time.Time,
 	iqbCache cache.InterQueryCache,
-	ph print.Hook) ([]byte, error) {
+	ndbCache builtins.NDBCache,
+	ph print.Hook,
+	capabilities *ast.Capabilities) ([]byte, error) {
 	metrics.Timer("wasm_vm_eval").Start()
 	defer metrics.Timer("wasm_vm_eval").Stop()
 
@@ -367,7 +384,7 @@ func (i *VM) evalCompat(ctx context.Context,
 	// make use of it (e.g. `http.send`); and it will spawn a go routine
 	// cancelling the builtins that use topdown.Cancel, when the context is
 	// cancelled.
-	i.dispatcher.Reset(ctx, seed, ns, iqbCache, ph)
+	i.dispatcher.Reset(ctx, seed, ns, iqbCache, ndbCache, ph, capabilities)
 
 	err := i.setHeapState(ctx, i.evalHeapPtr)
 	if err != nil {
@@ -386,7 +403,7 @@ func (i *VM) evalCompat(ctx context.Context,
 		}
 	}
 
-	if err := i.evalCtxSetEntrypoint(ctx, ctxAddr, int32(entrypoint)); err != nil {
+	if err := i.evalCtxSetEntrypoint(ctx, ctxAddr, entrypoint); err != nil {
 		return nil, err
 	}
 
@@ -451,11 +468,16 @@ func (i *VM) SetPolicyData(ctx context.Context, opts vmOpts) error {
 
 	i.dataAddr = 0
 
-	var err error
-	if err = i.setHeapState(ctx, i.baseHeapPtr); err != nil {
+	// Release any stashed heap blocks since they will be above the base heap pointer
+	if err := i.heapStashClear(ctx); err != nil {
 		return err
 	}
 
+	if err := i.setHeapState(ctx, i.baseHeapPtr); err != nil {
+		return err
+	}
+
+	var err error
 	if opts.parsedData != nil {
 		if uint32(i.memory.DataSize(i.store))-uint32(i.baseHeapPtr) < uint32(len(opts.parsedData)) {
 			delta := uint32(len(opts.parsedData)) - (uint32(i.memory.DataSize(i.store)) - uint32(i.baseHeapPtr))
@@ -469,7 +491,7 @@ func (i *VM) SetPolicyData(ctx context.Context, opts vmOpts) error {
 		copy(mem[i.baseHeapPtr:i.baseHeapPtr+len], opts.parsedData)
 		i.dataAddr = opts.parsedDataAddr
 
-		i.evalHeapPtr = i.baseHeapPtr + int32(len)
+		i.evalHeapPtr = i.baseHeapPtr + len
 		err := i.setHeapState(ctx, i.evalHeapPtr)
 		if err != nil {
 			return err
@@ -480,7 +502,13 @@ func (i *VM) SetPolicyData(ctx context.Context, opts vmOpts) error {
 		}
 	}
 
-	if i.evalHeapPtr, err = i.getHeapState(ctx); err != nil {
+	// Stash any free blocks so that eval()/setHeapState() won't leak them
+	if err := i.heapBlocksStash(ctx); err != nil {
+		return err
+	}
+
+	i.evalHeapPtr, err = i.getHeapState(ctx)
+	if err != nil {
 		return err
 	}
 
@@ -521,8 +549,12 @@ func (i *VM) Entrypoints() map[string]int32 {
 func (i *VM) SetDataPath(ctx context.Context, path []string, value interface{}) error {
 	// Reset the heap ptr before patching the vm to try and keep any
 	// new allocations safe from subsequent heap resets on eval.
-	err := i.setHeapState(ctx, i.evalHeapPtr)
-	if err != nil {
+	if err := i.setHeapState(ctx, i.evalHeapPtr); err != nil {
+		return err
+	}
+
+	// Restore saved blocks protected from leaking in eval()/setHeapState()
+	if err := i.heapBlocksRestore(ctx); err != nil {
 		return err
 	}
 
@@ -544,8 +576,12 @@ func (i *VM) SetDataPath(ctx context.Context, path []string, value interface{}) 
 	// We don't need to free the value, assume it is "owned" as part of the
 	// overall data object now.
 	// We do need to free the path
+	if err := i.valueFree(ctx, pathAddr); err != nil {
+		return err
+	}
 
-	if err := i.free(ctx, pathAddr); err != nil {
+	// Stash free blocks so eval() calls don't leak them when calling setHeapState()
+	if err := i.heapBlocksStash(ctx); err != nil {
 		return err
 	}
 
@@ -568,6 +604,18 @@ func (i *VM) SetDataPath(ctx context.Context, path []string, value interface{}) 
 // specified path. If an error occurs the instance is still in a valid state, however
 // the data will not have been modified.
 func (i *VM) RemoveDataPath(ctx context.Context, path []string) error {
+	// Reset the heap ptr before patching the vm to try and keep any
+	// new allocations safe from subsequent heap resets on eval.
+	err := i.setHeapState(ctx, i.evalHeapPtr)
+	if err != nil {
+		return err
+	}
+
+	// Restore saved blocks protected from leaking in eval()/setHeapState()
+	if err := i.heapBlocksRestore(ctx); err != nil {
+		return err
+	}
+
 	pathAddr, err := i.toRegoJSON(ctx, path, true)
 	if err != nil {
 		return err
@@ -578,7 +626,17 @@ func (i *VM) RemoveDataPath(ctx context.Context, path []string) error {
 		return err
 	}
 
-	if err := i.free(ctx, pathAddr); err != nil {
+	if err := i.valueFree(ctx, pathAddr); err != nil {
+		return err
+	}
+
+	// Stash free blocks so eval() calls don't leak them when calling setHeapState()
+	if err = i.heapBlocksStash(ctx); err != nil {
+		return err
+	}
+
+	// Update the eval heap pointer to accommodate for any newly available memory
+	if i.evalHeapPtr, err = i.getHeapState(ctx); err != nil {
 		return err
 	}
 
@@ -712,7 +770,7 @@ func callOrCancel(ctx context.Context, vm *VM, name string, args ...int32) (inte
 	go func() {
 		select {
 		case <-ctx.Done():
-			vm.intHandle.Interrupt()
+			vm.store.Engine.IncrementEpoch()
 		case <-done:
 		}
 		close(ctxdone)
@@ -745,9 +803,8 @@ func callOrCancel(ctx context.Context, vm *VM, name string, args ...int32) (inte
 		// if last err was trap, extract information
 		var t *wasmtime.Trap
 		if errors.As(err, &t) {
-			code := t.Code()
-			if code != nil && *code == wasmtime.Interrupt {
-				return 0, sdk_errors.New(sdk_errors.CancelledErr, getStack(t.Frames(), "interrupted"))
+			if strings.Contains(t.Message(), "wasm trap: interrupt") {
+				return 0, sdk_errors.New(sdk_errors.CancelledErr, "interrupted")
 			}
 			return 0, sdk_errors.New(sdk_errors.InternalErr, getStack(t.Frames(), "trapped"))
 		}

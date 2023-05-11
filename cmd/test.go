@@ -39,7 +39,6 @@ type testCommandParams struct {
 	threshold    float64
 	timeout      time.Duration
 	ignore       []string
-	failureLine  bool
 	bundleMode   bool
 	benchmark    bool
 	benchMem     bool
@@ -47,13 +46,15 @@ type testCommandParams struct {
 	count        int
 	target       *util.EnumFlag
 	skipExitZero bool
+	capabilities *capabilitiesFlag
 }
 
 func newTestCommandParams() *testCommandParams {
 	return &testCommandParams{
 		outputFormat: util.NewEnumFlag(testPrettyOutput, []string{testPrettyOutput, testJSONOutput, benchmarkGoBenchOutput}),
-		explain:      newExplainFlag([]string{explainModeFails, explainModeFull, explainModeNotes}),
+		explain:      newExplainFlag([]string{explainModeFails, explainModeFull, explainModeNotes, explainModeDebug}),
 		target:       util.NewEnumFlag(compile.TargetRego, []string{compile.TargetRego, compile.TargetWasm}),
+		capabilities: newcapabilitiesFlag(),
 	}
 }
 
@@ -79,20 +80,23 @@ Example policy (example/authz.rego):
 
 	package authz
 
-	allow {
-		input.path = ["users"]
-		input.method = "POST"
+	import future.keywords.if
+
+	allow if {
+		input.path == ["users"]
+		input.method == "POST"
 	}
 
-	allow {
-		input.path = ["users", profile_id]
-		input.method = "GET"
-		profile_id = input.user_id
+	allow if {
+		input.path == ["users", input.user_id]
+		input.method == "GET"
 	}
 
 Example test (example/authz_test.rego):
 
-	package authz
+	package authz_test
+
+	import data.authz.allow
 
 	test_post_allowed {
 		allow with input as {"path": ["users"], "method": "POST"}
@@ -153,6 +157,11 @@ func opaTest(args []string) int {
 		return 0
 	}
 
+	if !isThresholdValid(testParams.threshold) {
+		fmt.Fprintln(os.Stderr, "Code coverage threshold must be between 0 and 100")
+		return 1
+	}
+
 	filter := loaderFilter{
 		Ignore: testParams.ignore,
 	}
@@ -164,7 +173,7 @@ func opaTest(args []string) int {
 
 	if testParams.bundleMode {
 		bundles, err = tester.LoadBundles(args, filter.Apply)
-		store = inmem.New()
+		store = inmem.NewWithOpts(inmem.OptRoundTripOnWrite(false))
 	} else {
 		modules, store, err = tester.Load(args, filter.Apply)
 	}
@@ -182,10 +191,21 @@ func opaTest(args []string) int {
 
 	defer store.Abort(ctx, txn)
 
+	var capabilities *ast.Capabilities
+	// if capabilities are not provided as a cmd flag,
+	// then ast.CapabilitiesForThisVersion must be called
+	// within checkModules to ensure custom builtins are properly captured
+	if testParams.capabilities.C != nil {
+		capabilities = testParams.capabilities.C
+	} else {
+		capabilities = ast.CapabilitiesForThisVersion()
+	}
+
 	compiler := ast.NewCompiler().
 		SetErrorLimit(testParams.errLimit).
 		WithPathConflictsCheck(storage.NonEmpty(ctx, store, txn)).
-		WithEnablePrintStatements(!testParams.benchmark)
+		WithEnablePrintStatements(!testParams.benchmark).
+		WithCapabilities(capabilities)
 
 	info, err := runtime.Term(runtime.Params{})
 	if err != nil {
@@ -211,9 +231,9 @@ func opaTest(args []string) int {
 
 	timeout := testParams.timeout
 	if timeout == 0 { // unset
-		timeout = time.Duration(5 * time.Second)
+		timeout = 5 * time.Second
 		if testParams.benchmark {
-			timeout = time.Duration(30 * time.Second)
+			timeout = 30 * time.Second
 		}
 	}
 
@@ -223,7 +243,6 @@ func opaTest(args []string) int {
 		CapturePrintOutput(true).
 		EnableTracing(testParams.verbose).
 		SetCoverageQueryTracer(coverTracer).
-		EnableFailureLine(testParams.failureLine).
 		SetRuntime(info).
 		SetModules(modules).
 		SetBundles(bundles).
@@ -247,7 +266,6 @@ func opaTest(args []string) int {
 		default:
 			reporter = tester.PrettyReporter{
 				Verbose:                  testParams.verbose,
-				FailureLine:              testParams.failureLine,
 				Output:                   os.Stdout,
 				BenchmarkResults:         testParams.benchmark,
 				BenchMarkShowAllocations: testParams.benchMem,
@@ -322,38 +340,38 @@ func runTests(ctx context.Context, txn storage.Transaction, runner *tester.Runne
 }
 
 func filterTrace(params *testCommandParams, trace []*topdown.Event) []*topdown.Event {
-	ops := map[topdown.Op]struct{}{}
-	mode := params.explain.String()
-
-	if mode == explainModeFull {
-		// Don't bother filtering anything
-		return trace
-	}
-
 	// If an explain mode was specified, filter based
 	// on the mode. If no explain mode was specified,
 	// default to show both notes and fail events
 	showDefault := !params.explain.IsSet() && params.verbose
-
-	if mode == explainModeNotes || showDefault {
-		ops[topdown.NoteOp] = struct{}{}
+	if showDefault {
+		return lineage.Filter(trace, func(event *topdown.Event) bool {
+			return event.Op == topdown.NoteOp || event.Op == topdown.FailOp
+		})
 	}
 
-	if mode == explainModeFails || showDefault {
-		ops[topdown.FailOp] = struct{}{}
+	mode := params.explain.String()
+	switch mode {
+	case explainModeNotes:
+		return lineage.Notes(trace)
+	case explainModeFull:
+		return lineage.Full(trace)
+	case explainModeFails:
+		return lineage.Fails(trace)
+	case explainModeDebug:
+		return lineage.Debug(trace)
+	default:
+		return nil
 	}
+}
 
-	return lineage.Filter(trace, func(event *topdown.Event) bool {
-		_, relevant := ops[event.Op]
-		return relevant
-	})
+func isThresholdValid(t float64) bool {
+	return 0 <= t && t <= 100
 }
 
 func init() {
 	testCommand.Flags().BoolVarP(&testParams.skipExitZero, "exit-zero-on-skipped", "z", false, "skipped tests return status 0")
 	testCommand.Flags().BoolVarP(&testParams.verbose, "verbose", "v", false, "set verbose reporting mode")
-	testCommand.Flags().BoolVarP(&testParams.failureLine, "show-failure-line", "l", false, "show test failure line")
-	_ = testCommand.Flags().MarkDeprecated("show-failure-line", "use -v instead")
 	testCommand.Flags().DurationVar(&testParams.timeout, "timeout", 0, "set test timeout (default 5s, 30s when benchmarking)")
 	testCommand.Flags().VarP(testParams.outputFormat, "format", "f", "set output format")
 	testCommand.Flags().BoolVarP(&testParams.coverage, "coverage", "c", false, "report coverage (overrides debug tracing)")
@@ -367,5 +385,6 @@ func init() {
 	addIgnoreFlag(testCommand.Flags(), &testParams.ignore)
 	setExplainFlag(testCommand.Flags(), testParams.explain)
 	addTargetFlag(testCommand.Flags(), testParams.target)
+	addCapabilitiesFlag(testCommand.Flags(), testParams.capabilities)
 	RootCommand.AddCommand(testCommand)
 }

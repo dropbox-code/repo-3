@@ -18,7 +18,8 @@ Requirements:
 
 ## Getting Started
 
-After cloning the repository, just run `make`. This will:
+After forking the repository and creating a [clone from your fork](https://docs.github.com/en/get-started/quickstart/contributing-to-projects),
+just run `make`. This will:
 
 - Build the OPA binary.
 - Run all of the tests.
@@ -81,7 +82,7 @@ git commit -s
 git push origin somefeature
 ```
 
-> Make sure to use a [good commit message](../contributing/#commit-messages).
+> Make sure to use a [good commit message](../contrib-code/#commit-messages).
 
 Now, submit a Pull Request from your fork.
 See the official [GitHub Documentation](https://help.github.com/en/github/collaborating-with-issues-and-pull-requests/creating-a-pull-request-from-a-fork)
@@ -111,17 +112,17 @@ the results are posted and can be viewed
 ## Dependencies
 
 OPA is a Go module [https://github.com/golang/go/wiki/Modules](https://github.com/golang/go/wiki/Modules)
-and dependencies are tracked with the standard [go.mod](../../go.mod) file.
+and dependencies are tracked with the standard [go.mod](https://github.com/open-policy-agent/opa/blob/main/go.mod) file.
 
-We also keep a full copy of the dependencies in the [vendor](../../vendor)
-directory. All `go` commands from the [Makefile](../../Makefile) will enable
+We also keep a full copy of the dependencies in the [vendor](https://github.com/open-policy-agent/opa/tree/main/vendor)
+directory. All `go` commands from the [Makefile](https://github.com/open-policy-agent/opa/blob/main/Makefile) will enable
 module mode by setting `GO111MODULE=on GOFLAGS=-mod=vendor` which will also
 force using the `vendor` directory.
 
 To update a dependency ensure that `GO111MODULE` is either on, or the repository
 qualifies for `auto` to enable module mode. Then simply use `go get ..` to get
-the version desired. This should update the [go.mod](../../go.mod) and (potentially)
-[go.sum](../../go.sum) files. After this you *MUST* run `go mod vendor` to ensure
+the version desired. This should update the [go.mod](https://github.com/open-policy-agent/opa/blob/main/go.mod) and (potentially)
+[go.sum](https://github.com/open-policy-agent/opa/blob/main/go.sum) files. After this you *MUST* run `go mod vendor` to ensure
 that the `vendor` directory is in sync.
 
 Example workflow for updating a dependency:
@@ -138,7 +139,7 @@ If dependencies have been removed ensure to run `go mod tidy` to clean them up.
 
 Sometimes we use some tools which are versioned and vendored
 with OPA as dependencies. For now, we have none, but any we use in the future
-should go in [tools.go](../../tools.go).
+should go in [tools.go](https://github.com/open-policy-agent/opa/blob/main/tools.go).
 
 More details on the pattern: [https://github.com/go-modules-by-example/index/blob/master/010_tools/README.md](https://github.com/go-modules-by-example/index/blob/master/010_tools/README.md)
 
@@ -153,9 +154,21 @@ files in the root of this repository:
 * `.go-version`- which is used by the Makefile and CI tooling. Put the exact go
   version that OPA should use.
 
+## Refactoring and Style Fixes
+
+If you've found some code that you think would benefit from a refactoring — either by making it more readable or more
+performant, that's great! Some things should however be considered before you submit such a change:
+
+* Avoid mixing bug fixes and feature PRs with refactorings or style fixes. These PRs are generally difficult to review.
+  Instead, split your work up in multiple, separate PRs. If a refactoring is "needed" for a feature, at least ensure to
+  split the two into separate commits.
+* If you intend to work on a larger refactoring project, make sure to first create an issue for discussion. Sometimes
+  things are the way they are for a reason, even when it's not immediately obvious.
+* Ensure that there are tests covering the code subject to change.
+
 ## CI Configuration
 
-OPA uses Github Actions defined in the [.github/workflows](../../.github/workflows)
+OPA uses Github Actions defined in the [.github/workflows](https://github.com/open-policy-agent/opa/tree/main/.github/workflows)
 directory.
 
 ### Github Action Secrets

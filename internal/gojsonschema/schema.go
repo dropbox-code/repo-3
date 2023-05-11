@@ -73,7 +73,6 @@ func (d *Schema) SetRootSchemaName(name string) {
 // Pretty long function ( sorry :) )... but pretty straight forward, repetitive and boring
 // Not much magic involved here, most of the job is to validate the key names and their values,
 // then the values are copied into SubSchema struct
-//
 func (d *Schema) parseSchema(documentNode interface{}, currentSchema *SubSchema) error {
 
 	if currentSchema.Draft == nil {
@@ -517,17 +516,12 @@ func (d *Schema) parseSchema(documentNode interface{}, currentSchema *SubSchema)
 		}
 	}
 
-	if pattern, err := getString(m, KeyPattern); err != nil {
+	// NOTE: Regex compilation step removed as we don't use "pattern" attribute for
+	// type checking, and this would cause schemas to fail if they included patterns
+	// that were valid ECMA regex dialect but not known to Go (i.e. the regexp.Compile
+	// function), such as patterns with negative lookahead
+	if _, err := getString(m, KeyPattern); err != nil {
 		return err
-	} else if pattern != nil {
-		regexpObject, err := regexp.Compile(*pattern)
-		if err != nil {
-			return errors.New(formatErrorDescription(
-				Locale.MustBeValidRegex(),
-				ErrorDetails{"key": KeyPattern},
-			))
-		}
-		currentSchema.pattern = regexpObject
 	}
 
 	if format, err := getString(m, KeyFormat); err != nil {

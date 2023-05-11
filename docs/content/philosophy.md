@@ -132,7 +132,7 @@ into OPA when the state of the world changes. This can happen periodically or wh
 event (like a database change notification) occurs. Base documents loaded asynchronously
 are always accessed under the `data` global variable. On the other hand, base documents can
 also be pushed or pulled into OPA _synchronously_ when your software queries OPA for policy
-decisions. We say refer to base documents pushed synchronously as "input". Policies can
+decisions. We refer to base documents pushed synchronously as "input". Policies can
 access these inputs under the `input` global variable. To pull base documents during
 policy evaluation, OPA exposes (and can be extended with custom) built-in functions like
 `http.send`. Built-in function return values can be assigned to local variables and
@@ -140,7 +140,7 @@ surfaced in virtual documents. Data loaded synchronously is kept outside of `dat
 avoid naming conflicts.
 
 The following table summarizes the different models for loading base documents into OPA,
-how they can referenced inside of policies, and the actual mechanism(s) for loading.
+how they can be referenced inside of policies, and the actual mechanism(s) for loading.
 
 | Model | How to access in Rego | How to integrate with OPA |
 | --- | --- | --- |
@@ -151,7 +151,7 @@ how they can referenced inside of policies, and the actual mechanism(s) for load
 
 Data loaded asynchronously into OPA is cached in-memory so that it can be read efficiently
 during policy evaluation. Similarly, policies are also cached in-memory to ensure
-high-performance and and high-availability. Data _pulled_ synchronously can also be
+high-performance and high-availability. Data _pulled_ synchronously can also be
 cached in-memory. For more information on loading external data into OPA, including tradeoffs,
 see the [External Data](../external-data) page.
 
@@ -170,7 +170,7 @@ virtual documents named `data.iam.user_has_role` and `data.acme.user_is_assigned
 {{< figure src="data-model.svg" width="65" caption="Hypothetical Policy Document Model" >}}
 
 > [1] OPA has excellent support for loading JSON and YAML because they are prevalent
-> in modern systems however OPA is not tied to any particular data format. OPA
+> in modern systems; however, OPA is not tied to any particular data format. OPA
 > uses its own internal representation for structures like maps and lists (a.k.a.,
 > objects and arrays in JSON.)
 
@@ -181,5 +181,5 @@ virtual documents named `data.iam.user_has_role` and `data.acme.user_is_assigned
 > nested, hierarchical data structures containing several levels of embedded
 > maps and lists.
 
-> [3] Internally HTTP requests like `GET /v1/data` or `GET /v1/data/foo/bar` are turned
+> [3] Internally, HTTP requests like `GET /v1/data` or `GET /v1/data/foo/bar` are turned
 > into Rego queries that are almost identical to the HTTP path (e.g., `data` or `data.foo.bar`)

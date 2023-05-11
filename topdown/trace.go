@@ -58,6 +58,11 @@ const (
 	// WasmOp is emitted when resolving a ref using an external
 	// Resolver.
 	WasmOp Op = "Wasm"
+
+	// UnifyOp is emitted when two terms are unified.  Node will be set to an
+	// equality expression with the two terms.  This Node will not have location
+	// info.
+	UnifyOp Op = "Unify"
 )
 
 // VarMetadata provides some user facing information about
@@ -78,6 +83,9 @@ type Event struct {
 	LocalMetadata map[ast.Var]VarMetadata // Contains metadata for the local variable bindings. Nil if variables were not included in the trace event.
 	Message       string                  // Contains message for Note events.
 	Ref           *ast.Ref                // Identifies the subject ref for the event. Only applies to Index and Wasm operations.
+
+	input    *ast.Term
+	bindings *bindings
 }
 
 // HasRule returns true if the Event contains an ast.Rule.
@@ -117,6 +125,17 @@ func (evt *Event) Equal(other *Event) bool {
 
 func (evt *Event) String() string {
 	return fmt.Sprintf("%v %v %v (qid=%v, pqid=%v)", evt.Op, evt.Node, evt.Locals, evt.QueryID, evt.ParentID)
+}
+
+// Input returns the input object as it was at the event.
+func (evt *Event) Input() *ast.Term {
+	return evt.input
+}
+
+// Plug plugs event bindings into the provided ast.Term. Because bindings are mutable, this only makes sense to do when
+// the event is emitted rather than on recorded trace events as the bindings are going to be different by then.
+func (evt *Event) Plug(term *ast.Term) *ast.Term {
+	return evt.bindings.Plug(term)
 }
 
 func (evt *Event) equalNodes(other *Event) bool {
@@ -217,15 +236,15 @@ func (b *BufferTracer) Config() TraceConfig {
 
 // PrettyTrace pretty prints the trace to the writer.
 func PrettyTrace(w io.Writer, trace []*Event) {
-	depths := depths{}
-	for _, event := range trace {
-		depth := depths.GetOrSet(event.QueryID, event.ParentID)
-		fmt.Fprintln(w, formatEvent(event, depth))
-	}
+	prettyTraceWith(w, trace, false)
 }
 
 // PrettyTraceWithLocation prints the trace to the writer and includes location information
 func PrettyTraceWithLocation(w io.Writer, trace []*Event) {
+	prettyTraceWith(w, trace, true)
+}
+
+func prettyTraceWith(w io.Writer, trace []*Event, locations bool) {
 	depths := depths{}
 
 	filePathAliases, longest := getShortenedFileNames(trace)
@@ -235,8 +254,12 @@ func PrettyTraceWithLocation(w io.Writer, trace []*Event) {
 
 	for _, event := range trace {
 		depth := depths.GetOrSet(event.QueryID, event.ParentID)
-		location := formatLocation(event, filePathAliases)
-		fmt.Fprintf(w, "%-*s %s\n", locationWidth, location, formatEvent(event, depth))
+		if locations {
+			location := formatLocation(event, filePathAliases)
+			fmt.Fprintf(w, "%-*s %s\n", locationWidth, location, formatEvent(event, depth))
+		} else {
+			fmt.Fprintln(w, formatEvent(event, depth))
+		}
 	}
 }
 
@@ -268,11 +291,10 @@ func formatEvent(event *Event, depth int) string {
 
 func formatEventPadding(event *Event, depth int) string {
 	spaces := formatEventSpaces(event, depth)
-	padding := ""
 	if spaces > 1 {
-		padding += strings.Repeat("| ", spaces-1)
+		return strings.Repeat("| ", spaces-1)
 	}
-	return padding
+	return ""
 }
 
 func formatEventSpaces(event *Event, depth int) int {
@@ -365,9 +387,9 @@ func (ds depths) GetOrSet(qid uint64, pqid uint64) int {
 	return depth
 }
 
-func builtinTrace(bctx BuiltinContext, args []*ast.Term, iter func(*ast.Term) error) error {
+func builtinTrace(bctx BuiltinContext, operands []*ast.Term, iter func(*ast.Term) error) error {
 
-	str, err := builtins.StringOperand(args[0].Value, 1)
+	str, err := builtins.StringOperand(operands[0].Value, 1)
 	if err != nil {
 		return handleBuiltinErr(ast.Trace.Name, bctx.Location, err)
 	}
@@ -399,7 +421,18 @@ func rewrite(event *Event) *Event {
 
 	switch v := event.Node.(type) {
 	case *ast.Expr:
-		node = v.Copy()
+		expr := v.Copy()
+
+		// Hide generated local vars in 'key' position that have not been
+		// rewritten.
+		if ev, ok := v.Terms.(*ast.Every); ok {
+			if kv, ok := ev.Key.Value.(ast.Var); ok {
+				if rw, ok := cpy.LocalMetadata[kv]; !ok || rw.Name.IsGenerated() {
+					expr.Terms.(*ast.Every).Key = nil
+				}
+			}
+		}
+		node = expr
 	case ast.Body:
 		node = v.Copy()
 	case *ast.Rule:

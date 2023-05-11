@@ -14,7 +14,7 @@ authorization so that:
 - Traffic between OPA and clients is encrypted.
 - Clients verify the OPA API endpoint identity.
 - OPA verifies client identities.
-- Clients are only granted access to specific APIs or sections of [The `data` Document](../#the-data-document).
+- Clients are only granted access to specific APIs or sections of [The `data` Document](../philosophy/#the-opa-document-model).
 
 ## TLS and HTTPS
 
@@ -29,7 +29,7 @@ is specified.
 
 The server can track the certificate and key files' contents, and reload them if necessary:
 
-- ``--tls-cert-refresh=<duration>`` specifies how often OPA should check the TLS certificate and
+- ``--tls-cert-refresh-period=<duration>`` specifies how often OPA should check the TLS certificate and
   private key file for changes (defaults to 0s, disabling periodic refresh). This argument accepts
   any duration, such as "30s", "5m" or "24h".
 
@@ -88,6 +88,21 @@ curl -k https://localhost:8181/v1/data
 We have to use cURL's `-k/--insecure` flag because we are using a self-signed certificate.
 {{< /info >}}
 
+## Interface Binding
+
+OPA can be configured to listen on specific interfaces using the `--addr` flag. For example:
+
+```bash
+opa run --server \
+  --log-level debug \
+  --addr localhost:8181 \
+```
+
+By default, OPA binds to the 0.0.0.0 interface, which allows the OPA server to be exposed to services running outside of the same machine. It's important to note that binding OPA to the 0.0.0.0 interface by itself is not inherently insecure in a trusted environment, exposing OPA to the outside world would also require opening ports and likely a similar procedure on a gateway layer above.
+
+In situations where OPA is not intended to be exposed to remote services, it is recommended to bind OPA to the localhost interface, which only allows connections from the same machine. If it is necessary to expose OPA to remote services, ensure to follow the security recommendations on this page, such as requiring authentication.
+
+
 ## Authentication and Authorization
 
 This section shows how to configure OPA to authenticate and authorize client
@@ -119,7 +134,7 @@ value will be undefined when the authorization policy is evaluated.
 - Client TLS certificates: Client TLS authentication is enabled by starting
 OPA with ``--authentication=tls``. When this authentication mode is enabled,
 OPA will require all clients to provide a client certificate. It is verified
-against the CA certificate(s) provided via `--tls-ca-cert-path`. Upon successful
+against the CA certificate(s) provided via `--tls-ca-cert-file`. Upon successful
 verification, the `input.identity` value is set to the TLS certificate's
 subject.
 
@@ -140,7 +155,7 @@ must be provided on startup. The authorization policy must be structured as foll
 # system.authz as follows:
 package system.authz
 
-default allow = false  # Reject requests by default.
+default allow := false  # Reject requests by default.
 
 allow {
   # Logic to authorize request goes here.
@@ -154,7 +169,8 @@ packages however it is recommended that administrators keep the policy under the
 
 If the document produced by the ``allow`` rule is ``true``, the request is
 processed normally. If the document is undefined or **not** ``true``, the
-request is rejected immediately.
+request is rejected immediately. The count of requests rejected by an OPA instance
+are surfaced via the performance metrics in the [Status](../management-status) information.
 
 OPA provides the following `input` document when executing the authorization
 policy:
@@ -162,10 +178,20 @@ policy:
 <!-- TODO(sr): check if "jsonc" looks alright on netlify -->
 ```jsonc
 {
-    # Identity established by authentication scheme.
+    # Identity value established by authentication scheme.
     # When Bearer tokens are used, the identity is
     # set to the Bearer token value.
+    # When TLS client certificates are used, the identity
+    # is set to the certificate subject RDNSequence.
+    # E.g. "OU=opa-client-01,O=Example"
+    # Note: client certificate data is available in the
+    # 'client_certificates' key.
     "identity": "",
+    
+    # Client certificates provided by the client when calling OPA
+    # over an mTLS connection. Represented in input as a list of
+    # Go x509.Certificate objects marshalled as JSON.
+    "client_certificates": [],
 
     # One of {"GET", "POST", "PUT", "PATCH", "DELETE"}.
     "method": "",
@@ -193,7 +219,7 @@ policy:
     #
     # Example header check:
     #
-    #   input.headers["X-Custom"][_] = "mysecret"
+    #   input.headers["X-Custom"][_] == "mysecret"
     #
     # Header keys follow canonical MIME form. The first character and any
     # characters following a hyphen are uppercase. The rest are lowercase.
@@ -233,7 +259,7 @@ identity:
 ```live:system_authz_secret:module:read_only
 package system.authz
 
-default allow = false           # Reject requests by default.
+default allow := false           # Reject requests by default.
 
 allow {                         # Allow request if...
     "secret" == input.identity  # Identity is the secret root key.
@@ -283,16 +309,16 @@ follows:
 ```live:system_authz_object_resp:module:read_only
 package system.authz
 
-default allow = {
+default allow := {
     "allowed": false,
     "reason": "unauthorized resource access"
 }
 
-allow = { "allowed": true } {   # Allow request if...
+allow := { "allowed": true } {   # Allow request if...
     "secret" == input.identity  # identity is the secret root key.
 }
 
-allow = { "allowed": false, "reason": reason } {
+allow := { "allowed": false, "reason": reason } {
     not input.identity
     reason := "no identity provided"
 }
@@ -319,7 +345,7 @@ tokens := {
     }
 }
 
-default allow = false           # Reject requests by default.
+default allow := false           # Reject requests by default.
 
 allow {                         # Allow request if...
     input.identity == "secret"  # Identity is the secret root key.
@@ -362,7 +388,7 @@ tokens := {
     }
 }
 
-default allow = false               # Reject requests by default.
+default allow := false               # Reject requests by default.
 
 allow {                             # Allow request if...
     some right
@@ -377,7 +403,6 @@ allow {                             # Allow request if...
 }
 
 identity_rights[right] {             # Right is in the identity_rights set if...
-    some role
     token := tokens[input.identity]  # Token exists for identity, and...
     role := token.roles[_]           # Token has a role, and...
     right := rights[role]            # Role has rights defined.
@@ -386,32 +411,60 @@ identity_rights[right] {             # Right is in the identity_rights set if...
 
 ### TLS-based Authentication Example
 
-To set up authentication based on TLS, we will need three certificates:
+To set up authentication based on mutual TLS, we will need three certificates:
 
 1. the CA cert (self-signed),
 2. the server cert (signed by the CA), and
 3. the client cert (signed by the CA).
 
-These are example invocations using `openssl`.
-Don't use these in production, the key sizes are only good for demonstration purposes.
+We use `openssl` to create the example certificates and keys used in this demo. In production, creation of certificates
+and keys should be handled by an automated process out of scope for this tutorial.
 
-Note that we're creating an extra client, which has a certificate signed by the proper
-CA, but will later be used to illustrate the authorization policy.
+Note that we also create an extra client cert (client-2). While this certificate is signed by the same CA, it's identity
+is different. We'll use this to show our authorization policy in action.
 
 ```bash
 # CA
-openssl genrsa -out ca-key.pem 2048
-openssl req -x509 -new -nodes -key ca-key.pem -days 1000 -out ca.pem -subj "/CN=my-ca"
+openssl ecparam -out ca-key.pem -name prime256v1 -genkey 
+openssl req -x509 -new -nodes -key ca-key.pem -days 30 -out ca.pem -subj "/CN=my-ca"
 
 # client 1
-openssl genrsa -out client-key.pem 2048
-openssl req -new -key client-key.pem -out csr.pem -subj "/CN=my-client"
-openssl x509 -req -in csr.pem -CA ca.pem -CAkey ca-key.pem -CAcreateserial -out client-cert.pem -days 1000
+cat <<EOF >req.cnf
+[req]
+req_extensions = v3_req
+distinguished_name = req_distinguished_name
+
+[req_distinguished_name]
+
+[v3_req]
+basicConstraints = CA:FALSE
+subjectAltName = @alt_names
+
+[alt_names]
+URI.1 = spiffe://example.com/client-1
+EOF
+openssl ecparam -out client-key-1.pem -name prime256v1 -genkey 
+openssl req -new -key client-key-1.pem -out csr.pem -subj "/CN=client-1" -config req.cnf 
+openssl x509 -req -in csr.pem -CA ca.pem -CAkey ca-key.pem -CAcreateserial -out client-cert-1.pem -days 10 -extensions v3_req -extfile req.cnf -sha256
 
 # client 2
-openssl genrsa -out client-key-2.pem 2048
-openssl req -new -key client-key-2.pem -out csr.pem -subj "/CN=my-client-2"
-openssl x509 -req -in csr.pem -CA ca.pem -CAkey ca-key.pem -CAcreateserial -out client-cert-2.pem -days 1000
+cat <<EOF >req.cnf
+[req]
+req_extensions = v3_req
+distinguished_name = req_distinguished_name
+
+[req_distinguished_name]
+
+[v3_req]
+basicConstraints = CA:FALSE
+subjectAltName = @alt_names
+
+[alt_names]
+URI.1 = spiffe://example.com/client-2
+EOF
+openssl ecparam -out client-key-2.pem -name prime256v1 -genkey 
+openssl req -new -key client-key-2.pem -out csr.pem -subj "/CN=client-2" -config req.cnf
+openssl x509 -req -in csr.pem -CA ca.pem -CAkey ca-key.pem -CAcreateserial -out client-cert-2.pem -days 10 -extensions v3_req -extfile req.cnf -sha256
 
 # create server cert with IP and DNS SANs
 cat <<EOF >req.cnf
@@ -429,27 +482,46 @@ subjectAltName = @alt_names
 [alt_names]
 DNS.1 = opa.example.com
 IP.1 = 127.0.0.1
+URI.1 = spiffe://example.com/server
 EOF
-openssl genrsa -out server-key.pem 2048
-openssl req -new -key server-key.pem -out csr.pem -subj "/CN=my-server" -config req.cnf
-openssl x509 -req -in csr.pem -CA ca.pem -CAkey ca-key.pem -CAcreateserial -out server-cert.pem -days 1000 -extensions v3_req -extfile req.cnf
+openssl ecparam -out server-key.pem -name prime256v1 -genkey 
+openssl req -new -key server-key.pem -out csr.pem -subj "/CN=server" -config req.cnf
+openssl x509 -req -in csr.pem -CA ca.pem -CAkey ca-key.pem -CAcreateserial -out server-cert.pem -days 10 -extensions v3_req -extfile req.cnf -sha256
 ```
 
-We also create a simple authorization policy file, called `check.rego`:
+We also create an example authorization policy file, called `check.rego`. This example `system.authz` policy will check
+the certificate ID against a list of allowed paths as defined in a simple Access Control List.
+
+{{< danger >}}
+When choosing messages to return to unauthorized clients in `system.authz` policies, be careful not to expose sensitive
+information such as which paths are allowed.
+{{< /danger >}}
 
 ```live:system_authz_x509:module:read_only
 package system.authz
 
-# client_cns may defined in policy or pushed into OPA as data.
-client_cns := {
-	"my-client": true
+import future.keywords.if
+import future.keywords.in
+
+id_uri := input.client_certificates[0].URIs[0]
+id_string := sprintf("%s://%s%s", [id_uri.Scheme, id_uri.Host, id_uri.Path])
+
+# client_acl represents an access control list and may defined in policy or pushed into OPA as data changes.
+client_acl := {
+  "spiffe://example.com/client-1": [["v1", "data"]],
+  "spiffe://example.com/client-2": [],
 }
 
-default allow = false
+default allow := {"allowed": false, "reason": "Access denied: unknown caller"}
 
-allow {                                        # Allow request if
-	split(input.identity, "=", ["CN", cn]) # the cert subject is a CN, and
-	client_cns[cn]                         # the name is a known client.
+allow := { "allowed": true } if {
+  input.path in client_acl[id_string]
+} else := {
+  "allowed": false,
+  "reason": sprintf("%s is not allowed to call /%s", [
+    id_string,
+    concat("/", input.path),
+  ])
 }
 ```
 
@@ -464,7 +536,7 @@ $ opa run -s \
   --authorization=basic \
   -a https://127.0.0.1:8181 \
   check.rego
-INFO[2019-01-14T10:24:52+01:00] First line of log stream.                     addrs="[https://127.0.0.1:8181]" insecure_addr=
+{"addrs":["https://127.0.0.1:8181"],"diagnostic-addrs":[],"level":"info","msg":"Initializing server.","time":"2023-01-04T10:31:12Z"}
 ```
 
 We can use `curl` to validate our TLS-based authentication setup:
@@ -473,8 +545,8 @@ First, we use the client certificate that was signed by the CA, and has a subjec
 matching our authorization policy:
 
 ```console
-$ curl --key client-key.pem \
-  --cert client-cert.pem \
+$ curl --key client-key-1.pem \
+  --cert client-cert-1.pem \
   --cacert ca.pem \
   --resolve opa.example.com:8181:127.0.0.1 \
   https://opa.example.com:8181/v1/data
@@ -484,7 +556,7 @@ $ curl --key client-key.pem \
 Note that we're passing the CA cert to curl -- this is done to have curl accept
 the server's certificate, which has been signed by our CA cert.
 
-Since we've setup an IP SAN, we may also `curl https://127.0.0.1:8181/v1/data`
+Since we've set up an IP SAN, we may also `curl https://127.0.0.1:8181/v1/data`
 directly. (To keep our examples focused, we'll do that from here on.)
 
 Using a valid certificate whose subject will be declined by our authorization
@@ -497,17 +569,17 @@ $ curl --key client-key-2.pem \
   https://127.0.0.1:8181/v1/data
 {
   "code": "unauthorized",
-  "message": "request rejected by administrative policy"
+  "message": "spiffe://example.com/client-2 is not allowed to call /v1/data"
 }
 ```
 
 Finally, we'll attempt to query without a client certificate:
 ```console
 $ curl --cacert ca.pem https://127.0.0.1:8181/v1/data
-curl: (35) error:14094412:SSL routines:ssl3_read_bytes:sslv3 alert bad certificate
+curl: (56) LibreSSL SSL_read: error:1404C412:SSL routines:ST_OK:sslv3 alert bad certificate, errno 0
 ```
 
-As you can see, TLS-based authentication disallows these request completely.
+As you can see, TLS-based authentication disallows these request before even invoking the `system.authz` policy.
 
 ## Secure Health and Monitoring
 
@@ -550,7 +622,7 @@ clients access to the default policy decision, i.e., `POST /`:
 package system.authz
 
 # Deny access by default.
-default allow = false
+default allow := false
 
 # Allow anonymous access to the default policy decision.
 allow {

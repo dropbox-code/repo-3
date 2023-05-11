@@ -21,6 +21,31 @@ see the section below.
 
 See the [Configuration Reference](../configuration) for configuration details.
 
+### Bundle build
+
+The CLI command [`opa build`](../cli/#opa-build) gives you the capability to build your own bundles.
+
+Here is a basic example on how to build a bundle from a folder called `foo`. The bundle will be named by default `bundle.tar.gz`.
+```console
+$ ls foo/
+example.rego
+
+$ opa build -b foo/
+```
+
+More, you can optimize the bundle by specifying the `--optimize` or `-O` flag.
+```console
+opa build -b foo/ --optimize=1
+```
+
+Finally, you can also sign your bundle with `opa build`.
+```console
+opa build --verification-key /path/to/public_key.pem --signing-key /path/to/private_key.pem --bundle foo/
+```
+
+For more information, see the [`opa build` command documentation.](../cli/#opa-build)
+
+
 ### Bundle Service API
 
 OPA expects the service to expose an API endpoint that serves bundles. The
@@ -86,10 +111,13 @@ OPA can optionally persist activated bundles to disk for recovery purposes. To e
 persistence, set the `bundles[_].persist` field to `true`. When bundle
 persistence is enabled, OPA will attempt to read the bundle from disk on startup. This
 allows OPA to start with the most recently activated bundle in case OPA cannot communicate
-with the bundle server. When communication between OPA and the bundle server is restored,
-the latest bundle is downloaded, activated, and persisted.
+with the bundle server. OPA will try to load and activate persisted bundles on a best-effort basis. Any errors
+encountered during the process will be surfaced in the bundle's status update. When communication between OPA and
+the bundle server is restored, the latest bundle is downloaded, activated, and persisted.
 
-> By default, bundles are persisted under the current working directory of the OPA process (e.g., `./.opa/bundles/<bundle-name>/bundle.tar.gz`).
+{{< info >}}
+By default, bundles are persisted under the current working directory of the OPA process (e.g., `./.opa/bundles/<bundle-name>/bundle.tar.gz`).
+{{< /info >}}
 
 The optional `bundles[_].signing` field can be used to specify the `keyid` and `scope` that should be used
 for verifying the signature of the bundle. See [this](#signing) section for details.
@@ -104,14 +132,56 @@ in bundle responses to identify the revision of the bundle. OPA will include the
 check the `If-None-Match` header and reply with HTTP `304 Not Modified` if the
 bundle has not changed since the last update.
 
+#### HTTP Long Polling
+
+With the periodic bundle downloading (ie. `short polling`) technique, OPA sends regular requests to the remote HTTP
+server to pull any available bundle. If there is no new bundle, the server responds with a `304 Not Modified` response.
+The polling frequency depends on the latency that the client can tolerate in
+retrieving updated information from the server.  A drawback of this
+method is that if the acceptable latency is low, then the polling frequency could add unnecessary
+burden on the server and/or network.
+
+[HTTP Long Polling](https://datatracker.ietf.org/doc/html/rfc6202#section-2) helps to minimize server/network resource
+usage and also reduces the delay in delivery of updates to the client. When OPA sends a long poll request to the server,
+it defers its response until an update is available or timeout has occurred. In case of a timeout, the server responds
+with a `304 Not Modified` response.
+
+The below configuration shows how to enable bundle downloading via `long polling`:
+
+```yaml
+services:
+  - name: acmecorp
+    url: https://example.com/service/v1
+    credentials:
+      bearer:
+        token: "bGFza2RqZmxha3NkamZsa2Fqc2Rsa2ZqYWtsc2RqZmtramRmYWxkc2tm"
+
+bundles:
+  authz:
+    service: acmecorp
+    resource: somedir/bundle.tar.gz
+    persist: true
+    polling:
+      long_polling_timeout_seconds: 10
+    signing:
+      keyid: my_global_key
+      scope: read
+```
+
+With the above configuration, OPA sends a long poll request to the server with a timeout set to `10` seconds. If the server
+supports `long polling`, OPA expects the server to set the `Content-Type` header to `application/vnd.openpolicyagent.bundles`.
+If the server does not support `long polling`, OPA will fallback to the regular periodic polling.
+
 ### Bundle File Format
 
 Bundle files are gzipped tarballs that contain policies and data. The data
 files in the bundle must be organized hierarchically into directories inside
 the tarball.
 
-> The hierarchical organization indicates to OPA where to load the data files
-> into the [the `data` Document](../#the-data-document).
+{{< info >}}
+The hierarchical organization indicates to OPA where to load the data files
+into the [the `data` Document](../philosophy/#the-opa-document-model).
+{{< /info >}}
 
 You can list the content of a bundle with `tar`.
 
@@ -200,11 +270,12 @@ __Some important details for bundle files:__
 * OPA will only load Wasm modules named `policy.wasm`. Other WebAssembly binary
   files will be ignored.
 
-> YAML data loaded into OPA is converted to JSON. Since JSON is a subset of
-> YAML, you are not allowed to use binary or null keys in objects and boolean
-> and number keys are converted to strings. Also, YAML !!binary tags are not
-> supported.
-
+{{< info >}}
+YAML data loaded into OPA is converted to JSON. Since JSON is a subset of
+YAML, you are not allowed to use binary or null keys in objects and boolean
+and number keys are converted to strings. Also, YAML !!binary tags are not
+supported.
+{{< /info >}}
 
 ### Multiple Sources of Policy and Data
 
@@ -215,13 +286,15 @@ and data from multiple sources, you can implement your bundle service
 to generate bundles that are scoped to a subset of OPA's policy and
 data cache.
 
-> 🚨 We recommend that whenever possible, you implement policy and data
-> aggregation centrally, however, in some cases that's not possible
-> (e.g., due to latency requirements.).
-> When using multiple sources there are **no** ordering guarantees for which bundle loads first and
+{{< danger >}}
+We recommend that whenever possible, you implement policy and data
+aggregation centrally, however, in some cases that's not possible
+(e.g., due to latency requirements.).
+When using multiple sources there are **no** ordering guarantees for which bundle loads first and
 takes over some root. If multiple bundles conflict, but are loaded at different
 times, OPA may go into an error state. It is highly recommended to use
 the health check and include bundle state: [Monitoring OPA](../monitoring#health-checks)
+{{< /danger >}}
 
 To scope bundles to a subset of OPA's policy and data cache, include
 a top-level `roots` key in the bundle that defines the roots of the
@@ -281,9 +354,11 @@ When OPA receives a new bundle, it checks that it has been properly signed using
 configured with out-of-band.  Only if that verification succeeds does OPA activate the new bundle; otherwise, OPA
 continues using its existing bundle and reports an activation failure via the status API and error logging.
 
-> ⚠️ `opa run` performs bundle signature verification only when the `-b`/`--bundle` flag is given
-> or when Bundle downloading is enabled. Sub-commands primarily used in development and debug environments
-> (such as `opa eval`, `opa test`, etc.) DO NOT verify bundle signatures at this point in time.
+{{< info >}}
+⚠️ `opa run` performs bundle signature verification only when the `-b`/`--bundle` flag is given
+or when Bundle downloading is enabled. Sub-commands primarily used in development and debug environments
+(such as `opa eval`, `opa test`, etc.) DO NOT verify bundle signatures at this point in time.
+{{< /info >}}
 
 #### Signature Format
 
@@ -322,12 +397,10 @@ following form:
     },
     {
       "name": "roles/bindings/data.json",
-      "hash": "42cfe6768b57bb5f7503c165c28dd07ac5b813554ebc850f2cc35843e7137b1d"
+      "hash": "42cfe6768b57bb5f7503c165c28dd07ac5b813554ebc850f2cc35843e7137b1d",
+      "algorithm": "SHA-256"
     }
-  ],
-  "iat": 1592248027,
-  "iss": "JWTService",
-  "scope": "write"
+  ]
 }
 ```
 
@@ -340,8 +413,14 @@ following form:
 | `iat` | `string` | No | Time of signature creation since epoch in seconds. For informational purposes only. |
 | `iss` | `string` | No | Identifies the issuer of the JWT. For informational purposes only. |
 
-> Note: OPA will first look for the `keyid` on the command-line. If the `keyid` is empty, OPA will look for it in it's
-> configuration. If `keyid` is still empty, OPA will finally look for `kid` in the JWT header.
+{{< info >}}
+OPA will first look for the `keyid` on the command-line. If the `keyid` is empty, OPA will look for it in it's
+configuration. If `keyid` is still empty, OPA will finally look for `kid` in the JWT header.
+
+To include additional claims in the JWT payload such as `scope`, `iat`, `iss` use the `--claims-file` flag
+in the `opa build` or `opa sign` commands to provide a JSON file containing optional claims. See `opa build --help`
+or `opa sign --help` for more details.
+{{< /info >}}
 
 The following hashing algorithms are supported:
 
@@ -418,6 +497,132 @@ bundle.RegisterSigner("custom", &CustomSigner{})
 bundle.RegisterVerifier("custom", &CustomVerifier{})
 ```
 
+### Delta Bundles
+
+A regular _snapshot_ bundle represents the entirety of OPA’s policy and data cache. When a new _snapshot_ bundle is
+downloaded, OPA will erase and overwrite all the policy and data in its cache before activating the new bundle. We can
+optionally scope the bundle to a subset of OPA’s policy and data cache by defining the `roots` in the bundle's `.manifest` file.
+
+Although OPA [caches](#caching) snapshot bundles to avoid unnecessary retransmission,
+servers must still retransmit the entire snapshot when any change occurs. If you need
+to propagate small changes to bundles without waiting for polling delays, consider
+using _delta_ bundles in conjunction with [HTTP Long Polling](#http-long-polling).
+
+_Delta_ bundles provide a more efficient way to make data changes by containing patches to data instead of complete snapshots.
+_Delta_ bundles are structured differently from _snapshot_ bundles. A _delta_ bundle contains a
+single `patch.json` file at the root of the bundle which includes a [JSON Patch](https://datatracker.ietf.org/doc/html/rfc6902)
+(i.e., an array of one or more JSON objects). The operations in the JSON Patch will be applied to OPA's in-memory store in order.
+
+{{< info >}}
+_Delta_ bundles currently support updates to data only and not policies. 
+{{< /info >}}
+
+#### Delta Bundle File Format
+
+OPA expects a _delta_ bundle to contain an optional `.manifest` file and a required `patch.json` file that specifies a list of one or more
+patch operations on the data. OPA will generate an error if a _delta_ bundle contains any policy, data or wasm binary files.
+If the `.manifest` file specifies any `roots`, any data patch outside the bundle's roots will cause an error.
+
+```bash
+$ tar tzf bundle.tar.gz
+.manifest
+patch.json
+```
+
+Below is an example of the `patch.json` file:
+
+```json
+{
+  "data": [
+    {"op": "upsert", "path": "/a/b", "value": ["hello", "world"]},
+    {"op": "remove", "path": "/a/c"}
+  ]
+}
+```
+
+If OPA has previously activated a _snapshot_ bundle that did not contain a .manifest file, then the _delta_ bundle
+must not contain a `.manifest` file.
+
+If OPA has a previously activated _snapshot_ bundle that did contain a `.manifest` file, then the _delta_ bundle may
+contain a `.manifest` file. Specifically if a previously activated _snapshot_ bundle contains a `.manifest` file that
+declares `roots` or `wasm` fields, a _delta_ bundle update MUST have the same values for the manifest
+`roots` and `wasm` fields from the original _snapshot_ bundle. This means a _delta_ bundle cannot be used to change
+the scope of the original bundle or update Wasm resolvers. A _delta_ bundle can however contain different
+values for the bundle's `revision` and `metadata`.
+
+{{< danger >}}
+An empty list of operations in a _delta_ bundle `patch.json` will remove all the data from OPA's in-memory store. I.e., the following are equivalent:
+
+```json
+{
+  "data": []
+}
+```
+
+```json
+{
+  "data": [
+    { "op": "replace", "path": "/", "value": {} }
+  ]
+}
+  ```
+If there are no operations to apply to the data, the bundle server should return the same [`Etag`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/ETag) value as the last update. OPA will send the last `Etag` value in the [`If-None-Match`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/If-None-Match) Header.
+{{< /danger >}}
+
+#### Delta Bundle Patch Operations
+
+Each patch operation defined in the `patch.json` file must have exactly one `op` member which indicates the
+operation to perform. Valid options include:
+
+|  op | Description  |
+|-----|--------------|
+| `"remove"` | The `"path"` specified will be removed from OPA's in-memory store. The `"value"` field is ignored for `"remove"` operations. |
+| `"replace"` | The value at the specified `"path"` will be replaced by the new value defined by the `"value"` field. The target path must exist for the operation to be successful. |
+| `"upsert"` | The `"value"` will be set at the specified `"path"`. If the `"path"` specifies an array index, the `"value"` is inserted into the array at the specified index. If the `"path"` specifies an object member that does not already exist, a new member is added to the object. If the object member exists, its value is replaced. If the `"path"` does not exist, OPA will create and add it to its in-memory store. |
+
+{{< info >}}
+The `upsert` operation in not part of the [JSON Patch](https://datatracker.ietf.org/doc/html/rfc6902) standard.
+{{< /info >}}
+
+The `"path"` field defines a JSON pointer path to the location to perform the operation on.
+
+The `"value"` field defines the value to be added or replaced. Only required for `"upsert"` and  `"replace"` operations.
+
+#### Current Limitations
+
+* _Delta_ bundles only support updates to data. Policies cannot be updated using _delta_ bundles.
+* _Delta_ bundles do not support bundle signing.
+* Unlike _snapshot_ bundles, activated _delta_ bundles are not persisted to disk when the `bundles[_].persist` field is `true`.
+
+#### Delta Bundle FAQ
+
+This section discusses some _delta_ bundle usage, edge cases and failure scenarios.
+
+* What happens if OPA cannot apply a data patch ?
+
+Bundle activation will fail in this scenario. In the next attempt to download the bundle, OPA will set the value
+of the `If-None-Match` header of the bundle request to the last successful activation Etag value. This should help the
+Bundle Service to send the correct revision of the bundle to OPA.
+
+* What happens if OPA cannot reach the Bundle Service (for example. network failure) or is unable to download a bundle ?
+
+OPA always includes the last successful activation Etag value in the bundle request. When OPA eventually reconnects
+with the server, the value of the `If-None-Match` header of bundle request could be empty indicating that OPA was not
+able to activate the first revision of the bundle itself. This helps the server to re-transmit the correct bundle revision.
+
+In case OPA has already activated a revision of the bundle, and reaches out to the server with the last
+successful activation Etag value, the server now knows to send the next bundle revision. This could either be a snapshot
+or delta bundle. One possible approach on the server-side, would be to first send a snapshot bundle and then send delta bundles
+to perform data patch operations. The server could maintain the order in which the bundles should go out for example,
+assigning an Etag value to each bundle revision. Hence, it can figure out the right bundle to send by looking up the
+`If-None-Match` header of bundle request and then lining-up the next bundle in the queue.
+
+* Does a _delta_ bundle always need to be preceded by a _snapshot_ bundle ?
+
+No. OPA will activate a _delta_ bundle if all the patch operations in it were successfully applied. Note that a _snapshot_
+bundle would erase and overwrite policy and data under the manifest `roots`.
+
+
 ## Implementations
 
 The Bundle API is simple. Most HTTP servers capable of serving static files will do. While not strictly required in all deployments, it is also good if the implementation supports:
@@ -493,9 +698,82 @@ Both methods are going to need a policy for either the service account or the IA
 3. Once the policy has been created, it can be assigned to the role.
 4. With the role created, go to the EC2 instance view. Select an instance where OPA will run and select "Actions" -> "Security" -> "Modify IAM role". Select the role created in previous steps.
 
+##### Web Identity Credentials
+
+Using EKS IAM Roles for Service Account (Web Identity) Credential.
+
+Below are steps to use OpenID connect provider and kubernetes.
+
+1. Go to the "IAM" section of the AWS console.
+2. Click Add provider and select OpenID connect.
+3. For Provider URL enter the one belonging to your chosen kubernetes cluster.
+4. Click on Get thumbprint
+5. For the audience enter: sts.amazonaws.com
+6. Add the provider.
+7. Once the provider is added, copy the ARN for the identity provider. Here's  an example ARN: arn:aws:iam::<your AWS account ID>:oidc-provider/oidc.eks.ap-northeast-1.amazonaws.com/id/DFGHJKKJHGF34HFDFGHY44TRFDE4RGDF
+8. Create an IAM role (eg: app_dev_role) with the policy created above and assign it to the kubernetes service account.
+9. Go to Trust relationships inside the created role and click Edit trust relationship and enter the following policy document.
+  ```json
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Principal": {
+            "Federated": "<the ARN of the Identity provider from step 7, e.g. arn:aws:iam::123456789012:oidc-provider/oidc.eks.ap-northeast-1.amazonaws.com/id/DFGHJKKJHGF34HFDFGHY44TRFDE4RGDF where 123456789012 is the account ID of your AWS account, and DFGHJK...4RGDF is the OpenID Connect URL's end>"
+          },
+          "Action": "sts:AssumeRoleWithWebIdentity",
+          "Condition": {
+            "StringEquals": {
+              "<the OpenID connect URL, e.g. oidc.eks.ap-northeast-1.amazonaws.com/id/B7060B6E991747ADDDC61ADD4B7875CF>:sub": "system:serviceaccount:<kubernetes namespace, e.g. app-dev>:<the kubernetes serviceaccount name, eg: app-dev-service-account>"
+            }
+          }
+        }
+      ]
+    }
+  ```
+10. Create the kubernetes service account.
+    ```yaml
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        annotations:
+          eks.amazonaws.com/role-arn: <the ARN of the IAM role from your account, e.g. arn:aws:iam::<aws_account eg, 123456789012>:role/app_dev_role>
+        name: <service account name, e.g. app-dev-service-account>
+        namespace: <k8 namespace, e.g. app-dev>
+      automountServiceAccountToken: false
+    ```
+11. Configure your kubernetes resources to use this service account.
+    ```yaml
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        ******
+      spec:
+        ******
+        template:
+          *******
+          spec:
+            serviceAccountName: app-dev-service-account # <--- like this
+            automountServiceAccountToken: true
+            containers:
+            ******
+    ```
+
+You should now be able to access AWS services from your kubernetes cluster.
+
+The above steps should add the following variable to the pod.
+
+```bash
+AWS_ROLE_ARN=<the ARN of the IAM role from your account, e.g. arn:aws:iam::123456789012:role/app_dev_role>
+AWS_WEB_IDENTITY_TOKEN_FILE=/var/run/secrets/eks.amazonaws.com/serviceaccount/token
+```
+
+Please read [IAM roles for service accounts](https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html) for more details.
+
 ##### Testing Authentication
 
-Use the [AWS CLI tools]([command line tools](https://aws.amazon.com/cli/)) (see "Upload Bundle" below).
+Use the [AWS CLI tools](https://aws.amazon.com/cli/) (see ["Upload Bundle"](#upload-bundle) below).
 
 #### Upload Bundle
 
@@ -525,6 +803,8 @@ bundles:
     resource: bundle.tar.gz
 ```
 
+**NOTE:** the S3 `url` is the bucket's regional endpoint.
+
 ##### Metadata Credentials
 
 In order for this to work it is required that the permissions you created in the "Authentication" steps above are embedded in an IAM Role, which is then assigned to the EC2 instance hosting OPA.
@@ -544,6 +824,56 @@ bundles:
     service: s3
     resource: bundle.tar.gz
 ```
+
+**NOTE:** the S3 `url` is the bucket's regional endpoint.
+
+##### Web Identity Credentials
+
+```yaml
+services:
+  s3:
+    url: https://my-example-opa-bucket.s3.eu-north-1.amazonaws.com
+    credentials:
+      s3_signing:
+        web_identity_credentials:
+          aws_region: eu-north-1
+          session_name: my-open-policy-agent # Optional. Default: open-policy-agent
+
+bundles:
+  authz:
+    service: s3
+    resource: bundle.tar.gz
+```
+
+**NOTE:** the S3 `url` is the bucket's regional endpoint.
+
+##### Credential Provider Chaining
+
+Multiple AWS credential providers can be configured. OPA will follow an *internally defined* order to try each of the credential provider given in the configuration till success. Following order of precedence is followed when multiple credential provider is given in the configuration
+
+1. Environment Credential
+2. Web Identity Credential
+3. Profile Credential
+4. Metadata Credential
+
+```yaml
+services:
+  s3:
+    url: https://my-example-opa-bucket.s3.eu-north-1.amazonaws.com
+    credentials:
+      s3_signing:
+        metadata_credentials:
+          aws_region: eu-north-1
+          iam_role: my-opa-bucket-access-role
+        environment_credentials: {}
+
+bundles:
+  authz:
+    service: s3
+    resource: bundle.tar.gz
+```
+
+**NOTE:** In this example, OPA will look for AWS credentials in the environment first before trying metadata endpoint. S3 signing will fail if none of the providers are successful.
 
 ### Google Cloud Storage
 
@@ -814,4 +1144,180 @@ bundles:
   authz:
     service: nginx
     resource: /bundle.tar.gz
+```
+
+### OCI Registry
+
+OPA is able to interact with [OCI](https://opencontainers.org/) compatible registries to be able to download and use policies stored as containers.
+To configure OPA to use an OCI repository see the [service configuration section](../configuration/#services)
+
+**Structure**
+The bundle container is composed of 3 layers:
+- the manifest layer - contains the information about the tarball layer of the container(the digest, size, mediatype and annotations) and the config layer
+- the bundle tarball layer - the actual bundle tarball
+- the configuration layer - currently empty
+
+For OCI compatible registries an ***oci*** folder is created in the [persistence directory](../configuration/#miscellaneous). If this value is not set, because the OCI downloader plugin requires a storage path, the system's temporary folder location will be used instead. This folder should be maintained by the user. We recommend backing-up or cleaning up this folder periodically as this acts as a local cache for the OCI downloader. 
+
+**Current Limitations**
+The OCI Downloader plugin used by OPA has a couple of limitation:
+- it accepts only **one** layer per image that contains the bundle tarball
+- it can download only the following application media types: 
+    - `application/vnd.oci.image.layer.v1.tar+gzip`
+    - `application/vnd.oci.image.manifest.v1+json`
+    - `application/vnd.oci.image.config.v1+json`
+
+#### Building and Publishing Policy Containers
+
+There are multiple ways to build an image from a policy code base using different tools.
+
+##### Using OPA and ORAS CLIs
+
+To build and push a policy bundle to a remote OCI registry with the [OPA CLI](../cli/) and [ORAS CLI](https://oras.land/cli/) you can  use the following commands:
+
+- `opa build <path_to_src>` will allow you to build a bundle tarball from your OPA policy and data files
+
+Now that we have the tarball we will need to provide a config manifest to the ORAS CLI and the tarball itself: 
+- `oras push <registry>/<org>/<repo>:<tag> --manifest-config <you_config_json>:application/vnd.oci.image.config.v1+json <the_tarball_obtained_from_opa_build>:application/vnd.oci.image.layer.v1.tar+gzip`
+
+Using an empty(`{}`) `manifest-config` json file should be sufficient to be able to push and allow the OCI downloader to use the remote policy image. 
+
+#### Maintaining a policy-as-code repository
+
+One of the easiest method of managing your policy bundles is to store your code base in a hosted repository service like Github or Gitlab and set up an automated way to build and publish your code as a container to the desired registry using a CI(ex. Github Action). 
+
+#### Example 
+
+In this example we are using the [ghcr.io](https://ghcr.io) OCI registry as the upstream repository and the OPA and ORAS CLI as our build and publishing tool.
+
+###### Starting from scratch
+
+Let's set up a basic policy example structured as:
+```
+└── src
+    ├── data.json
+    ├── .manifest
+    └── policies
+        └── hello.rego
+```
+
+Here our *hello.rego* file contains a very simple example:
+```
+package policies.play
+
+default hello = false
+
+hello {
+    m := input.message
+    m == "world"
+}
+```
+The *.manifest* file specifies the root only as:
+```
+{
+    "roots": ["policies"],
+    "metadata": {
+      "required_builtins": {
+          "builtin1": [
+          ],
+      }
+    }
+}
+```
+And the *data.json* file is empty json:
+```
+{}
+```
+
+###### Building your policy
+
+To build my bundle tarball I'm going to use the OPA CLI and run the following command:
+```bash
+opa build .src/ 
+```
+
+###### Pushing the container to a remote registry
+
+I'll prepare an empty config.json file that contains:
+```
+{}
+```
+
+To push the build image to an upstream registry we first need to login using:
+```bash
+ oras login ghcr.io
+```
+
+And now we can push our policy using:
+```bash
+oras push ghcr.io/someorg/policy-hello:1.0.0 --manifest-config config.json:application/vnd.oci.image.config.v1+json bundle.tar.gz:application/vnd.oci.image.layer.v1.tar+gzip
+```
+
+###### Spin up the policy with OPA CLI
+
+Now that our image is pushed we prepare the OPA configuration. 
+
+In this example the configuration.yaml looks like this as the pushed image is private we need credentials for OPA to download it:
+```
+services:
+  ghcr-registry:
+    url: https://ghcr.io
+    type: oci
+    credentials:
+      bearer:
+        scheme: "Bearer"
+        token: "<mytoken>"
+
+bundles:
+  authz:
+    service: ghcr-registry
+    resource: ghcr.io/someorg/policy-hello:1.0.0
+    persist: true
+    polling:
+      min_delay_seconds: 30
+      max_delay_seconds: 120
+```
+
+In the above configuration we pinned the configuration to use the 1.0.0 tag of the image. OPA will identify this image by the tag and the descriptor SHA. If the SHA of the image is changed upstream, OPA will redownload and activate the changes. 
+
+If we run the *opa CLI* with this configuration using the command it will open an interactive terminal (REPL) where we can see the loaded bundle:
+```bash
+opa run -c configuration.yaml
+```
+The terminal should show that the bundle has been loaded and activated:
+```
+> {"level":"info","msg":"Bundle loaded and activated successfully.","name":"authz","plugin":"bundle","time":"2022-06-15T16:50:53+03:00"}
+> data
+{
+  "policies": {
+    "play": {
+      "hello": false
+    }
+  }
+}
+> exit
+```
+We can now start OPA as a server using:
+```bash
+opa run --server --set default_decision=policies -c configuration.yaml
+```
+To interact with the server you can do a simple **curl** to verify if it works as intended:
+```bash
+curl localhost:8181 -i -d '{ "message":"world"}' -H 'Content-Type:application/json'
+
+HTTP/1.1 200 OK
+Content-Type: application/json
+Date: Wed, 15 Jun 2022 13:55:19 GMT
+Content-Length: 23
+
+{"play":{"hello":true}}
+```
+```bash
+curl localhost:8181 -i -d '{ "message":"other"}' -H 'Content-Type:application/json'
+HTTP/1.1 200 OK
+Content-Type: application/json
+Date: Wed, 15 Jun 2022 13:56:13 GMT
+Content-Length: 24
+
+{"play":{"hello":false}}
 ```

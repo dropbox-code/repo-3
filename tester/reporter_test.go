@@ -36,29 +36,52 @@ func TestPrettyReporterVerbose(t *testing.T) {
 			Package: "data.foo.bar",
 			Name:    "test_baz",
 			Trace:   getFakeTraceEvents(),
+			Location: &ast.Location{
+				File: "policy1.rego",
+			},
 		},
 		{
 			Package: "data.foo.bar",
 			Name:    "test_qux",
 			Error:   fmt.Errorf("some err"),
 			Trace:   getFakeTraceEvents(),
+			Location: &ast.Location{
+				File: "policy1.rego",
+			},
 		},
 		{
 			Package: "data.foo.bar",
 			Name:    "test_corge",
 			Fail:    true,
 			Trace:   getFakeTraceEvents(),
+			Location: &ast.Location{
+				File: "policy2.rego",
+			},
 		},
 		{
 			Package: "data.foo.bar",
 			Name:    "todo_test_qux",
 			Skip:    true,
 			Trace:   nil,
+			Location: &ast.Location{
+				File: "policy2.rego",
+			},
 		},
 		{
 			Package: "data.foo.bar",
 			Name:    "test_contains_print",
 			Output:  []byte("fake print output\n"),
+			Location: &ast.Location{
+				File: "policy3.rego",
+			},
+		},
+		{
+			Package: "data.foo.baz",
+			Name:    "p.q.r.test_quz",
+			Trace:   getFakeTraceEvents(),
+			Location: &ast.Location{
+				File: "policy4.rego",
+			},
 		},
 	}
 
@@ -80,20 +103,28 @@ data.foo.bar.test_corge: FAIL (0s)
 
 SUMMARY
 --------------------------------------------------------------------------------
+policy1.rego:
 data.foo.bar.test_baz: PASS (0s)
 data.foo.bar.test_qux: ERROR (0s)
   some err
+
+policy2.rego:
 data.foo.bar.test_corge: FAIL (0s)
 data.foo.bar.todo_test_qux: SKIPPED
+
+policy3.rego:
 data.foo.bar.test_contains_print: PASS (0s)
 
   fake print output
 
+
+policy4.rego:
+data.foo.baz.p.q.r.test_quz: PASS (0s)
 --------------------------------------------------------------------------------
-PASS: 2/5
-FAIL: 1/5
-SKIPPED: 1/5
-ERROR: 1/5
+PASS: 3/6
+FAIL: 1/6
+SKIPPED: 1/6
+ERROR: 1/6
 `
 
 	str := buf.String()
@@ -113,35 +144,62 @@ func TestPrettyReporter(t *testing.T) {
 			Package: "data.foo.bar",
 			Name:    "test_baz",
 			Trace:   getFakeTraceEvents(),
+			Location: &ast.Location{
+				File: "policy1.rego",
+			},
 		},
 		{
 			Package: "data.foo.bar",
 			Name:    "test_qux",
 			Error:   fmt.Errorf("some err"),
 			Trace:   getFakeTraceEvents(),
+			Location: &ast.Location{
+				File: "policy1.rego",
+			},
 		},
 		{
 			Package: "data.foo.bar",
 			Name:    "test_corge",
 			Fail:    true,
 			Trace:   getFakeTraceEvents(),
+			Location: &ast.Location{
+				File: "policy1.rego",
+			},
 		},
 		{
 			Package: "data.foo.bar",
 			Name:    "todo_test_qux",
 			Skip:    true,
 			Trace:   nil,
+			Location: &ast.Location{
+				File: "policy1.rego",
+			},
 		},
 		{
 			Package: "data.foo.bar",
 			Name:    "test_contains_print_pass",
 			Output:  []byte("fake print output\n"),
+			Location: &ast.Location{
+				File: "policy1.rego",
+			},
 		},
 		{
 			Package: "data.foo.bar",
 			Name:    "test_contains_print_fail",
 			Fail:    true,
 			Output:  []byte("fake print output2\n"),
+			Location: &ast.Location{
+				File: "policy2.rego",
+			},
+		},
+		{
+			Package: "data.foo.baz",
+			Name:    "p.q.r.test_quz",
+			Fail:    true,
+			Trace:   getFakeTraceEvents(),
+			Location: &ast.Location{
+				File: "policy3.rego",
+			},
 		},
 	}
 
@@ -154,19 +212,25 @@ func TestPrettyReporter(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	exp := `data.foo.bar.test_qux: ERROR (0s)
+	exp := `policy1.rego:
+data.foo.bar.test_qux: ERROR (0s)
   some err
 data.foo.bar.test_corge: FAIL (0s)
 data.foo.bar.todo_test_qux: SKIPPED
+
+policy2.rego:
 data.foo.bar.test_contains_print_fail: FAIL (0s)
 
   fake print output2
 
+
+policy3.rego:
+data.foo.baz.p.q.r.test_quz: FAIL (0s)
 --------------------------------------------------------------------------------
-PASS: 2/6
-FAIL: 2/6
-SKIPPED: 1/6
-ERROR: 1/6
+PASS: 2/7
+FAIL: 3/7
+SKIPPED: 1/7
+ERROR: 1/7
 `
 
 	if exp != buf.String() {
@@ -204,6 +268,10 @@ func TestJSONReporter(t *testing.T) {
 			Package: "data.foo.bar",
 			Name:    "test_contains_print",
 			Output:  []byte("fake print output\n"),
+		},
+		{
+			Package: "data.foo.baz",
+			Name:    "p.q.r.test_quz",
 		},
 	}
 
@@ -365,7 +433,13 @@ func TestJSONReporter(t *testing.T) {
 	  "name": "test_contains_print",
 	  "output": "ZmFrZSBwcmludCBvdXRwdXQK",
 	  "duration": 0
-  }
+  },
+  {
+	"location": null,
+	"package": "data.foo.baz",
+	"name": "p.q.r.test_quz",
+	"duration": 0
+}
 ]
 `))
 

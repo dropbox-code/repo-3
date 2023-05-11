@@ -12,7 +12,7 @@ policies over the HTTP request body.
 ## Prerequisites
 
 This tutorial requires Kubernetes 1.20 or later. To run the tutorial locally, we
-recommend using [minikube](https://minikube.sigs.k8s.io/docs/start/) in 
+recommend using [minikube](https://minikube.sigs.k8s.io/docs/start/) in
 version `v1.21+` with Kubernetes 1.20+.
 
 ## Steps
@@ -125,44 +125,46 @@ employee with the same `firstname` as himself.
 ```live:example:module:openable
 package envoy.authz
 
+import future.keywords
+
 import input.attributes.request.http as http_request
 
-default allow = false
+default allow := false
 
-allow {
-    is_token_valid
-    action_allowed
+allow if {
+	is_token_valid
+	action_allowed
 }
 
-is_token_valid {
-    token.valid
-    now := time.now_ns() / 1000000000
-    token.payload.nbf <= now
-    now < token.payload.exp
+is_token_valid if {
+	token.valid
+	now := time.now_ns() / 1000000000
+	token.payload.nbf <= now
+	now < token.payload.exp
 }
 
-action_allowed {
-    http_request.method == "GET"
-    token.payload.role == "guest"
-    glob.match("/people", ["/"], http_request.path)
+action_allowed if {
+	http_request.method == "GET"
+	token.payload.role == "guest"
+	glob.match("/people", ["/"], http_request.path)
 }
 
-action_allowed {
-    http_request.method == "GET"
-    token.payload.role == "admin"
-    glob.match("/people", ["/"], http_request.path)
+action_allowed if {
+	http_request.method == "GET"
+	token.payload.role == "admin"
+	glob.match("/people", ["/"], http_request.path)
 }
 
-action_allowed {
-    http_request.method == "POST"
-    token.payload.role == "admin"
-    glob.match("/people", ["/"], http_request.path)
-    lower(input.parsed_body.firstname) != base64url.decode(token.payload.sub)
+action_allowed if {
+	http_request.method == "POST"
+	token.payload.role == "admin"
+	glob.match("/people", ["/"], http_request.path)
+	lower(input.parsed_body.firstname) != base64url.decode(token.payload.sub)
 }
 
-token := {"valid": valid, "payload": payload} {
-    [_, encoded] := split(http_request.headers.authorization, " ")
-    [valid, _, payload] := io.jwt.decode_verify(encoded, {"secret": "secret"})
+token := {"valid": valid, "payload": payload} if {
+	[_, encoded] := split(http_request.headers.authorization, " ")
+	[valid, _, payload] := io.jwt.decode_verify(encoded, {"secret": "secret"})
 }
 ```
 
@@ -247,7 +249,7 @@ spec:
     spec:
       initContainers:
         - name: proxy-init
-          image: openpolicyagent/proxy_init:v5
+          image: openpolicyagent/proxy_init:v8
           # Configure the iptables bootstrap script to redirect traffic to the
           # Envoy proxy on port 8000, specify that Envoy will be running as user
           # 1111, and that we want to exclude port 8282 from the proxy for the
@@ -376,8 +378,8 @@ echo $SERVICE_URL
 For convenience, we’ll want to store Alice's and Bob's tokens in environment variables.
 
 ```bash
-export ALICE_TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiZ3Vlc3QiLCJzdWIiOiJZV3hwWTJVPSIsIm5iZiI6MTUxNDg1MTEzOSwiZXhwIjoxNjQxMDgxNTM5fQ.K5DnnbbIOspRbpCr2IKXE9cPVatGOCBrBQobQmBmaeU"
-export BOB_TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYWRtaW4iLCJzdWIiOiJZbTlpIiwibmJmIjoxNTE0ODUxMTM5LCJleHAiOjE2NDEwODE1Mzl9.WCxNAveAVAdRCmkpIObOTaSd0AJRECY2Ch2Qdic3kU8"
+export ALICE_TOKEN="eyJhbGciOiAiSFMyNTYiLCAidHlwIjogIkpXVCJ9.eyJleHAiOiAyMjQxMDgxNTM5LCAibmJmIjogMTUxNDg1MTEzOSwgInJvbGUiOiAiZ3Vlc3QiLCAic3ViIjogIllXeHBZMlU9In0.Uk5hgUqMuUfDLvBLnlXMD0-X53aM_Hlziqg3vhOsCc8"
+export BOB_TOKEN="eyJhbGciOiAiSFMyNTYiLCAidHlwIjogIkpXVCJ9.eyJleHAiOiAyMjQxMDgxNTM5LCAibmJmIjogMTUxNDg1MTEzOSwgInJvbGUiOiAiYWRtaW4iLCAic3ViIjogIlltOWkifQ.5qsm7rRTvqFHAgiB6evX0a_hWnGbWquZC0HImVQPQo8"
 ```
 
 Check that `Alice` can get employees **but cannot** create one.

@@ -7,6 +7,8 @@ package ast
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -344,6 +346,12 @@ func TestCheckInferenceRules(t *testing.T) {
 		{`number_key`, `q[x] = y { a = ["a", "b"]; y = a[x] }`},
 		{`non_leaf`, `p[x] { data.prefix.i[x][_] }`},
 	}
+	ruleset2 := [][2]string{
+		{`ref_rule_single`, `p.q.r { true }`},
+		{`ref_rule_single_with_number_key`, `p.q[3] { true }`},
+		{`ref_regression_array_key`,
+			`walker[[p, v]] = o { l = input; walk(l, k); [p, v] = k; o = {} }`},
+	}
 
 	tests := []struct {
 		note     string
@@ -465,6 +473,37 @@ func TestCheckInferenceRules(t *testing.T) {
 		{"non-leaf", ruleset1, "data.non_leaf.p", types.NewSet(
 			types.S,
 		)},
+
+		{"ref-rules single value, full ref", ruleset2, "data.ref_rule_single.p.q.r", types.B},
+		{"ref-rules single value, prefix", ruleset2, "data.ref_rule_single.p",
+			types.NewObject(
+				[]*types.StaticProperty{{
+					Key: "q", Value: types.NewObject(
+						[]*types.StaticProperty{{Key: "r", Value: types.B}},
+						types.NewDynamicProperty(types.S, types.A),
+					),
+				}},
+				types.NewDynamicProperty(types.S, types.A),
+			)},
+
+		{"ref-rules single value, number key, full ref", ruleset2, "data.ref_rule_single_with_number_key.p.q[3]", types.B},
+		{"ref-rules single value, number key, prefix", ruleset2, "data.ref_rule_single_with_number_key.p",
+			types.NewObject(
+				[]*types.StaticProperty{{
+					Key: "q", Value: types.NewObject(
+						[]*types.StaticProperty{{Key: json.Number("3"), Value: types.B}},
+						types.NewDynamicProperty(types.S, types.A),
+					),
+				}},
+				types.NewDynamicProperty(types.S, types.A),
+			)},
+
+		{"ref_regression_array_key", ruleset2, "data.ref_regression_array_key.walker",
+			types.NewObject(
+				nil,
+				types.NewDynamicProperty(types.NewArray([]types.Type{types.NewArray(types.A, types.A), types.A}, nil),
+					types.NewObject(nil, types.NewDynamicProperty(types.A, types.A))),
+			)},
 	}
 
 	for _, tc := range tests {
@@ -489,7 +528,7 @@ func TestCheckInferenceRules(t *testing.T) {
 
 			ref := MustParseRef(tc.ref)
 			checker := newTypeChecker()
-			env, err := checker.CheckTypes(nil, elems)
+			env, err := checker.CheckTypes(newTypeChecker().Env(map[string]*Builtin{"walk": BuiltinMap["walk"]}), elems, nil)
 
 			if err != nil {
 				t.Fatalf("Unexpected error %v:", err)
@@ -510,6 +549,87 @@ func TestCheckInferenceRules(t *testing.T) {
 		})
 	}
 
+}
+
+func TestCheckInferenceOverlapWithRules(t *testing.T) {
+	ruleset1 := [][2]string{
+		{`prefix.i.j.k`, `p = 1 { true }`},
+		{`prefix.i.j.k`, `p = "foo" { true }`},
+	}
+	tests := []struct {
+		note     string
+		rules    [][2]string
+		ref      string
+		expected types.Type // ref's type
+		query    string
+		extra    map[Var]types.Type
+	}{
+		{
+			note:     "non-leaf, extra vars",
+			rules:    ruleset1,
+			ref:      "data.prefix.i.j[k]",
+			expected: types.A,
+			query:    "data.prefix.i.j[k][b]",
+			extra: map[Var]types.Type{
+				Var("k"): types.S,
+				Var("b"): types.S,
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.note, func(t *testing.T) {
+			var elems []util.T
+
+			// Convert test rules into rule slice for "warmup" call.
+			for i := range tc.rules {
+				pkg := MustParsePackage(`package ` + tc.rules[i][0])
+				rule := MustParseRule(tc.rules[i][1])
+				module := &Module{
+					Package: pkg,
+					Rules:   []*Rule{rule},
+				}
+				rule.Module = module
+				elems = append(elems, rule)
+				for next := rule.Else; next != nil; next = next.Else {
+					next.Module = module
+					elems = append(elems, next)
+				}
+			}
+
+			ref := MustParseRef(tc.ref)
+			checker := newTypeChecker()
+			env, err := checker.CheckTypes(nil, elems, nil)
+			if err != nil {
+				t.Fatalf("Unexpected error %v:", err)
+			}
+
+			result := env.Get(ref)
+			if tc.expected == nil {
+				if result != nil {
+					t.Errorf("Expected %v type to be unset but got: %v", ref, result)
+				}
+			} else {
+				if result == nil {
+					t.Errorf("Expected to infer %v => %v but got nil", ref, tc.expected)
+				} else if types.Compare(tc.expected, result) != 0 {
+					t.Errorf("Expected to infer %v => %v but got %v", ref, tc.expected, result)
+				}
+			}
+
+			body := MustParseBody(tc.query)
+			env, err = checker.CheckBody(env, body)
+			if len(err) != 0 {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+			for ex, exp := range tc.extra {
+				act := env.Get(ex)
+				if types.Compare(act, exp) != 0 {
+					t.Errorf("Expected to infer extra %v => %v but got %v", ex, exp, act)
+				}
+			}
+		})
+	}
 }
 
 func TestCheckErrorSuppression(t *testing.T) {
@@ -642,7 +762,7 @@ func TestCheckBuiltinErrors(t *testing.T) {
 		{"objects-any", `fake_builtin_2({"a": a, "c": c})`},
 		{"objects-bad-input", `sum({"a": 1, "b": 2}, x)`},
 		{"sets-any", `sum({1,2,"3",4}, x)`},
-		{"virtual-ref", `plus(data.test.p, data.deabeef, 0)`},
+		{"virtual-ref", `plus(data.test.p, data.coffee, 0)`},
 	}
 
 	env := newTestEnv([]string{
@@ -781,6 +901,7 @@ func TestCheckRefErrInvalid(t *testing.T) {
 	env := newTestEnv([]string{
 		`p { true }`,
 		`q = {"foo": 1, "bar": 2} { true }`,
+		`a.b.c[3] = x { x = {"x": {"y": 2}} }`,
 	})
 
 	tests := []struct {
@@ -799,7 +920,7 @@ func TestCheckRefErrInvalid(t *testing.T) {
 			pos:   2,
 			have:  types.N,
 			want:  types.S,
-			oneOf: []Value{String("p"), String("q")},
+			oneOf: []Value{String("a"), String("p"), String("q")},
 		},
 		{
 			note:  "bad non-leaf ref",
@@ -808,7 +929,7 @@ func TestCheckRefErrInvalid(t *testing.T) {
 			pos:   2,
 			have:  types.N,
 			want:  types.S,
-			oneOf: []Value{String("p"), String("q")},
+			oneOf: []Value{String("a"), String("p"), String("q")},
 		},
 		{
 			note:  "bad leaf ref",
@@ -818,6 +939,24 @@ func TestCheckRefErrInvalid(t *testing.T) {
 			have:  types.N,
 			want:  types.S,
 			oneOf: []Value{String("bar"), String("foo")},
+		},
+		{
+			note:  "bad ref hitting last term",
+			query: `x = true; data.test.a.b.c[x][_]`,
+			ref:   `data.test.a.b.c[x][_]`,
+			pos:   5,
+			have:  types.B,
+			want:  types.Any{types.N, types.S},
+			oneOf: []Value{Number("3")},
+		},
+		{
+			note:  "bad ref hitting dynamic part",
+			query: `s = true; data.test.a.b.c[3].x[s][_] = _`,
+			ref:   `data.test.a.b.c[3].x[s][_]`,
+			pos:   7,
+			have:  types.B,
+			want:  types.S,
+			oneOf: []Value{String("y")},
 		},
 		{
 			note:  "bad leaf var",
@@ -851,12 +990,25 @@ func TestCheckRefErrInvalid(t *testing.T) {
 			oneOf: []Value{String("a"), String("c")},
 		},
 		{
+			// NOTE(sr): Thins one and the next are special: it cannot work with ref heads, either, since we need at
+			// least ONE string term after data.test: a module needs a package line, and the shortest head ref
+			// possible is thus data.x.y.
 			note:  "bad non-leaf value",
 			query: `data.test[1]`,
 			ref:   "data.test[1]",
 			pos:   2,
+			have:  types.N,
 			want:  types.S,
-			oneOf: []Value{String("p"), String("q")},
+			oneOf: []Value{String("a"), String("p"), String("q")},
+		},
+		{
+			note:  "bad non-leaf value (package)", // See note above ^^
+			query: `data[1]`,
+			ref:   "data[1]",
+			pos:   1,
+			have:  types.N,
+			want:  types.S,
+			oneOf: []Value{String("test")},
 		},
 		{
 			note:  "composite ref operand",
@@ -1020,9 +1172,11 @@ func TestFunctionTypeInferenceUnappliedWithObjectVarKey(t *testing.T) {
 		f(x) = y { y = {x: 1} }
 	`)
 
-	env, err := newTypeChecker().CheckTypes(newTypeChecker().Env(BuiltinMap), []util.T{
+	elems := []util.T{
 		module.Rules[0],
-	})
+	}
+
+	env, err := newTypeChecker().CheckTypes(newTypeChecker().Env(BuiltinMap), elems, nil)
 
 	if len(err) > 0 {
 		t.Fatal(err)
@@ -1218,8 +1372,8 @@ func TestCheckErrorOrdering(t *testing.T) {
 	inputReversed[1] = inputReversed[2]
 	inputReversed[2] = tmp
 
-	_, errs1 := newTypeChecker().CheckTypes(nil, input)
-	_, errs2 := newTypeChecker().CheckTypes(nil, inputReversed)
+	_, errs1 := newTypeChecker().CheckTypes(nil, input, nil)
+	_, errs2 := newTypeChecker().CheckTypes(nil, inputReversed, nil)
 
 	if errs1.Error() != errs2.Error() {
 		t.Fatalf("Expected error slices to be equal. errs1:\n\n%v\n\nerrs2:\n\n%v\n\n", errs1, errs2)
@@ -1253,7 +1407,9 @@ func newTestEnv(rs []string) *TypeEnv {
 		package test
 	`)
 
-	var elems []util.T
+	// We preallocate enough for at least the base rules.
+	// Else cases will cause reallocs, but that's okay.
+	elems := make([]util.T, 0, len(rs))
 
 	for i := range rs {
 		rule := MustParseRule(rs[i])
@@ -1265,7 +1421,7 @@ func newTestEnv(rs []string) *TypeEnv {
 		}
 	}
 
-	env, err := newTypeChecker().CheckTypes(newTypeChecker().Env(BuiltinMap), elems)
+	env, err := newTypeChecker().CheckTypes(newTypeChecker().Env(BuiltinMap), elems, nil)
 	if len(err) > 0 {
 		panic(err)
 	}
@@ -1818,39 +1974,39 @@ whocan[user] {
 	schemaSet.Put(MustParseRef(`schema["acl-schema"]`), dschema)
 
 	tests := []struct {
-		note   string
-		module string
-		err    string
+		note    string
+		modules []string
+		err     string
 	}{
-		{note: "data and input annotations", module: module1},
-		{note: "correct data override", module: module2},
-		{note: "incorrect data override", module: module3, err: "undefined ref: input.user"},
-		{note: "missing schema", module: module4, err: "undefined schema: schema.missing"},
-		{note: "overriding ref with length greater than one and not existing", module: module8, err: "undefined ref: input.apple.banana"},
-		{note: "overriding ref with length greater than one and existing prefix", module: module9},
-		{note: "overriding ref with length greater than one and existing prefix with type error", module: module10, err: "undefined ref: input.apple.orange.banana.fruit"},
-		{note: "overriding ref with length greater than one and existing ref", module: module11, err: "undefined ref: input.apple.orange.user"},
-		{note: "overriding ref of size one", module: module12, err: "undefined ref: input.user"},
-		{note: "overriding annotation written with brackets", module: module13, err: "undefined ref: input.apple.orange.fruit"},
-		{note: "overriding strict", module: module14, err: "undefined ref: input.request.object.spec.typo"},
-		{note: "data annotation but no input schema", module: module15},
-		{note: "data schema annotation does not overly restrict data expression", module: module16},
-		{note: "correct defer annotation on another rule has no effect base case", module: module17},
-		{note: "correct defer annotation on another rule has no effect", module: module18},
-		{note: "overriding ref with data prefix", module: module19, err: "data.acl.foo.blah"},
-		{note: "data annotation type error", module: module20, err: "data.acl.foo"},
-		{note: "more than one rule with metadata", module: module21},
-		{note: "more than one rule with metadata with type error", module: module22, err: "undefined ref"},
-		{note: "document scope", err: "test.rego:8: rego_type_error: match error", module: `package test
+		{note: "data and input annotations", modules: []string{module1}},
+		{note: "correct data override", modules: []string{module2}},
+		{note: "incorrect data override", modules: []string{module3}, err: "undefined ref: input.user"},
+		{note: "missing schema", modules: []string{module4}, err: "undefined schema: schema.missing"},
+		{note: "overriding ref with length greater than one and not existing", modules: []string{module8}, err: "undefined ref: input.apple.banana"},
+		{note: "overriding ref with length greater than one and existing prefix", modules: []string{module9}},
+		{note: "overriding ref with length greater than one and existing prefix with type error", modules: []string{module10}, err: "undefined ref: input.apple.orange.banana.fruit"},
+		{note: "overriding ref with length greater than one and existing ref", modules: []string{module11}, err: "undefined ref: input.apple.orange.user"},
+		{note: "overriding ref of size one", modules: []string{module12}, err: "undefined ref: input.user"},
+		{note: "overriding annotation written with brackets", modules: []string{module13}, err: "undefined ref: input.apple.orange.fruit"},
+		{note: "overriding strict", modules: []string{module14}, err: "undefined ref: input.request.object.spec.typo"},
+		{note: "data annotation but no input schema", modules: []string{module15}},
+		{note: "data schema annotation does not overly restrict data expression", modules: []string{module16}},
+		{note: "correct defer annotation on another rule has no effect base case", modules: []string{module17}},
+		{note: "correct defer annotation on another rule has no effect", modules: []string{module18}},
+		{note: "overriding ref with data prefix", modules: []string{module19}, err: "data.acl.foo.blah"},
+		{note: "data annotation type error", modules: []string{module20}, err: "data.acl.foo"},
+		{note: "more than one rule with metadata", modules: []string{module21}},
+		{note: "more than one rule with metadata with type error", modules: []string{module22}, err: "undefined ref"},
+		{note: "document scope", err: "test1.rego:8: rego_type_error: match error", modules: []string{`package test
 # METADATA
 # scope: document
 # schemas:
 # - input.foo: schema.number
 p { input.foo = 7 }
 
-p { input.foo = [] }`},
+p { input.foo = [] }`}},
 
-		{note: "rule scope overrides document scope", module: `package test
+		{note: "rule scope overrides document scope", modules: []string{`package test
 
 # METADATA
 # scope: document
@@ -1862,9 +2018,9 @@ p { input.foo = 7 }
 # scope: rule
 # schemas:
 # - input.foo: schema.string
-p { input.foo = "str" }`},
+p { input.foo = "str" }`}},
 
-		{note: "rule scope merges with document scope", err: "test.rego:15: rego_type_error: match error", module: `package test
+		{note: "rule scope merges with document scope", err: "test1.rego:15: rego_type_error: match error", modules: []string{`package test
 
 # METADATA
 # scope: document
@@ -1879,9 +2035,9 @@ p { input.bar = 7 }
 p {
 	input.foo = "str"
 	input.bar = "str"
-}`},
+}`}},
 
-		{note: "document scope conflict", err: "test.rego:9: rego_type_error: document annotation redeclared: test.rego:3", module: `package test
+		{note: "document scope conflict", err: "test1.rego:9: rego_type_error: document annotation redeclared: test1.rego:3", modules: []string{`package test
 
 # METADATA
 # scope: document
@@ -1893,17 +2049,45 @@ p { input.foo = 7 }
 # scope: document
 # schemas:
 # - input.foo: schema.string
-p { input.foo = "str" }`},
+p { input.foo = "str" }`}},
 
-		{note: "subpackages scope", err: "test.rego:7: rego_type_error: match error", module: `# METADATA
+		{note: "package scope in other module", modules: []string{`# METADATA
+# scope: package
+# schemas:
+# - input.foo: schema.number
+package test`, `package test
+
+p { input.foo = 7 }`}},
+
+		{note: "package scope in other module type conflict", err: "test2.rego:3: rego_type_error: match error", modules: []string{`# METADATA
+# scope: package
+# schemas:
+# - input.foo: schema.string
+package test`, `package test
+
+p { input.foo = 7 }`}},
+
+		{note: "package scope conflict", err: "test2.rego:1: rego_type_error: package annotation redeclared: test1.rego:1", modules: []string{`# METADATA
+# scope: package
+# schemas:
+# - input.foo: schema.string
+package test`, `# METADATA
+# scope: package
+# schemas:
+# - input.foo: schema.number
+package test
+
+p { input.foo = 7 }`}},
+
+		{note: "subpackages scope", err: "test1.rego:7: rego_type_error: match error", modules: []string{`# METADATA
 # scope: subpackages
 # schemas:
 # - input: schema.number
 package test
 
-p { input = "str" }`},
+p { input = "str" }`}},
 
-		{note: "document scope overrides subpackages scope", module: `# METADATA
+		{note: "document scope overrides subpackages scope", modules: []string{`# METADATA
 # scope: subpackages
 # schemas:
 # - input: schema.number
@@ -1913,9 +2097,9 @@ package test
 # scope: document
 # schemas:
 # - input: schema.string
-p { input = "str" }`},
+p { input = "str" }`}},
 
-		{note: "document scope overrides subpackages scope and finds error", err: "test.rego:11: rego_type_error: match error", module: `# METADATA
+		{note: "document scope overrides subpackages scope and finds error", err: "test1.rego:11: rego_type_error: match error", modules: []string{`# METADATA
 # scope: subpackages
 # schemas:
 # - input: schema.string
@@ -1925,17 +2109,17 @@ package test
 # scope: rule
 # schemas:
 # - input: schema.number
-p { input = "str" }`},
+p { input = "str" }`}},
 
-		{note: "package scope", err: "test.rego:7: rego_type_error: match error", module: `# METADATA
+		{note: "package scope", err: "test1.rego:7: rego_type_error: match error", modules: []string{`# METADATA
 # scope: package
 # schemas:
 # - input: schema.string
 package test
 
-p { input = 7 }`},
+p { input = 7 }`}},
 
-		{note: "rule scope overrides package scope", module: `# METADATA
+		{note: "rule scope overrides package scope", modules: []string{`# METADATA
 # scope: package
 # schemas:
 # - input: schema.string
@@ -1945,16 +2129,16 @@ package test
 # scope: rule
 # schemas:
 # - input: schema.number
-p { input = 7 }`},
+p { input = 7 }`}},
 
-		{note: "inline definition", err: "test.rego:7: rego_type_error: match error", module: `package test
+		{note: "inline definition", err: "test1.rego:7: rego_type_error: match error", modules: []string{`package test
 
 # METADATA
 # scope: rule
 # schemas:
 # - input: {"type": "string"}
-p { input = 7 }`},
-		{note: "document scope is unordered", err: "test.rego:3: rego_type_error: match error", module: `package test
+p { input = 7 }`}},
+		{note: "document scope is unordered", err: "test1.rego:3: rego_type_error: match error", modules: []string{`package test
 
 p { input = 7 }
 
@@ -1962,28 +2146,35 @@ p { input = 7 }
 # scope: document
 # schemas:
 # - input: schema.string
-p { input = "foo" }`},
+p { input = "foo" }`}},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.note, func(t *testing.T) {
-			mod, err := ParseModuleWithOpts("test.rego", tc.module, ParserOptions{
-				ProcessAnnotation: true,
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-
+			var modules []*Module
 			var elems []util.T
-			for _, rule := range mod.Rules {
-				elems = append(elems, rule)
-				for next := rule.Else; next != nil; next = next.Else {
-					elems = append(elems, next)
+
+			for i, module := range tc.modules {
+				mod, err := ParseModuleWithOpts(fmt.Sprintf("test%d.rego", i+1), module, ParserOptions{
+					ProcessAnnotation: true,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				modules = append(modules, mod)
+
+				for _, rule := range mod.Rules {
+					elems = append(elems, rule)
+					for next := rule.Else; next != nil; next = next.Else {
+						elems = append(elems, next)
+					}
 				}
 			}
 
 			oldTypeEnv := newTypeChecker().WithSchemaSet(schemaSet).Env(BuiltinMap)
-			typeenv, errors := newTypeChecker().WithSchemaSet(schemaSet).CheckTypes(oldTypeEnv, elems)
+			as, errors := BuildAnnotationSet(modules)
+			typeenv, checkErrors := newTypeChecker().WithSchemaSet(schemaSet).CheckTypes(oldTypeEnv, elems, as)
+			errors = append(errors, checkErrors...)
 			if len(errors) > 0 {
 				for _, e := range errors {
 					if tc.err == "" || !strings.Contains(e.Error(), tc.err) {
@@ -2059,7 +2250,9 @@ q = p`,
 					ss.Put(ref, schema)
 				}
 
-				compiler := NewCompiler().WithSchemas(ss)
+				compiler := NewCompiler().
+					WithSchemas(ss).
+					WithUseTypeCheckAnnotations(true)
 				compiler.Compile(modules)
 				if compiler.Failed() {
 					t.Fatal("unexpected error:", compiler.Errors)
@@ -2077,4 +2270,99 @@ q = p`,
 		})
 	}
 
+}
+
+func TestRemoteSchema(t *testing.T) {
+	schema := `{"type": "boolean"}`
+
+	schemaCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		schemaCalled = true
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(schema))
+	}))
+	defer server.Close()
+
+	policy := fmt.Sprintf(`
+package test
+
+# METADATA
+# schemas:
+# - input: {$ref: "%s"}
+p {
+	input == 42
+}`, server.URL)
+
+	module, err := ParseModuleWithOpts("policy.rego", policy, ParserOptions{ProcessAnnotation: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	modules := map[string]*Module{"policy.rego": module}
+
+	compiler := NewCompiler().
+		WithUseTypeCheckAnnotations(true)
+	compiler.Compile(modules)
+
+	if !compiler.Failed() {
+		t.Fatal("expected error, got none")
+	}
+
+	expectedTypeError := "rego_type_error: match error"
+	if !strings.Contains(compiler.Errors.Error(), expectedTypeError) {
+		t.Fatalf("expected error:\n\n%s\n\ngot:\n\n%s",
+			expectedTypeError, compiler.Errors.Error())
+	}
+
+	if !schemaCalled {
+		t.Fatal("expected schema server to be called, was not")
+	}
+}
+
+func TestRemoteSchemaHostNotAllowed(t *testing.T) {
+	capabilities := CapabilitiesForThisVersion()
+	capabilities.AllowNet = []string{}
+	schema := `{"type": "boolean"}`
+
+	schemaCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		schemaCalled = true
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(schema))
+	}))
+	defer server.Close()
+
+	policy := fmt.Sprintf(`
+package test
+
+# METADATA
+# schemas:
+# - input: {$ref: "%s"}
+p {
+	input == 42
+}`, server.URL)
+
+	module, err := ParseModuleWithOpts("policy.rego", policy, ParserOptions{ProcessAnnotation: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	modules := map[string]*Module{"policy.rego": module}
+
+	compiler := NewCompiler().
+		WithUseTypeCheckAnnotations(true).
+		WithCapabilities(capabilities)
+	compiler.Compile(modules)
+
+	if !compiler.Failed() {
+		t.Fatal("expected error, got none")
+	}
+
+	expectedTypeError := "rego_type_error: unable to compile the schema: remote reference loading disabled"
+	if !strings.Contains(compiler.Errors.Error(), expectedTypeError) {
+		t.Fatalf("expected error:\n\n%s\n\ngot:\n\n%s",
+			expectedTypeError, compiler.Errors.Error())
+	}
+
+	if schemaCalled {
+		t.Fatal("expected schema server to not be called, was")
+	}
 }

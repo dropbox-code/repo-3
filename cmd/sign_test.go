@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -32,7 +31,7 @@ func TestWriteTokenToFile(t *testing.T) {
 			t.Fatalf("Unexpected error %v", err)
 		}
 
-		bs, err := ioutil.ReadFile(filepath.Join(rootDir, ".signatures.json"))
+		bs, err := os.ReadFile(filepath.Join(rootDir, ".signatures.json"))
 		if err != nil {
 			t.Fatalf("Unexpected error %v", err)
 		}
@@ -99,7 +98,7 @@ func TestBundleSignVerification(t *testing.T) {
 		var filesInBundle [][2]string
 		err = filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
 			if !info.IsDir() {
-				bs, err := ioutil.ReadFile(path)
+				bs, err := os.ReadFile(path)
 				if err != nil {
 					return err
 				}
@@ -145,6 +144,11 @@ func TestValidateSignParams(t *testing.T) {
 		"no_signing_key": {
 			[]string{"foo"},
 			newSignCmdParams(),
+			true, fmt.Errorf("specify the secret (HMAC) or path of the PEM file containing the private key (RSA and ECDSA)"),
+		},
+		"empty_signing_key": {
+			[]string{"foo"},
+			signCmdParams{key: "", bundleMode: true},
 			true, fmt.Errorf("specify the secret (HMAC) or path of the PEM file containing the private key (RSA and ECDSA)"),
 		},
 		"non_bundle_mode": {

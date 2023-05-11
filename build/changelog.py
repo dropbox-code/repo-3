@@ -1,4 +1,4 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python3
 """
 changelog.py helps generate the CHANGELOG.md message for a particular release.
 """
@@ -8,7 +8,7 @@ import os
 import subprocess
 import shlex
 import re
-import urllib2
+import urllib.request, urllib.error, urllib.parse
 import sys
 import json
 
@@ -31,34 +31,20 @@ def get_commit_message(commit_id):
 
 
 def fetch(url, token):
-    req = urllib2.Request(url)
+    req = urllib.request.Request(url)
     if token:
         req.add_header('Authorization', "token {}".format(token))
     try:
-        rsp = urllib2.urlopen(req)
+        rsp = urllib.request.urlopen(req)
         result = json.loads(rsp.read())
     except Exception as e:
         if hasattr(e, 'reason'):
-            print >> sys.stderr, 'Failed to fetch URL {}: {}'.format(url, e.reason)
+            print('Failed to fetch URL {}: {}'.format(url, e.reason), file=sys.stderr)
         elif hasattr(e, 'code'):
-            print >> sys.stderr, 'Failed to fetch URL {}: Code {}'.format(url, e.code)
+            print('Failed to fetch URL {}: Code {}'.format(url, e.code), file=sys.stderr)
         return {}
     else:
         return result
-
-
-def get_maintainers():
-    with open("MAINTAINERS.md", "r") as f:
-        contents = f.read()
-    maintainers = re.findall(r"[^\s]+@[^\s]+", contents)
-    return maintainers
-
-maintainers = get_maintainers()
-
-
-def is_maintainer(commit_message):
-    author = author_email(commit_message)
-    return author in maintainers
 
 org_members_usernames = []
 def get_org_members(token):
@@ -72,7 +58,6 @@ def get_org_members(token):
         if login:
             org_members_usernames.append(str(login))
         if email:
-            maintainers.append(str(email))
             github_ids[email]=login
 
 def author_email(commit_message):
@@ -101,16 +86,14 @@ def get_github_id(commit_message, commit_id, token):
 
 def mention_author(commit_message, commit_id, token):
     username = get_github_id(commit_message, commit_id, token)
-    if username not in org_members_usernames:
-        return "authored by @[{author}](https://github.com/{author})".format(author=username)
-    return ""
+    return "authored by @{author}".format(author=username)
 
 def get_issue_reporter(issue_id, token):
     url = "https://api.github.com/repos/open-policy-agent/opa/issues/{issue_id}".format(issue_id=issue_id)
     issue_data = fetch(url, token)
     username = issue_data.get("user", "").get("login", "")
     if username not in org_members_usernames:
-        return "reported by @[{reporter}](https://github.com/{reporter})".format(reporter=username)
+        return "reported by @{reporter}".format(reporter=username)
     return ""
 
 def fixes_issue_id(commit_message):
@@ -163,8 +146,7 @@ def main():
         mention = ""
         reporter = ""
         commit_message = get_commit_message(commit_id)
-        if not is_maintainer(commit_message):
-            mention = mention_author(commit_message, commit_id, args.token)
+        mention = mention_author(commit_message, commit_id, args.token)
         issue_id = fixes_issue_id(commit_message)
         if issue_id:
             reporter = get_issue_reporter(issue_id, args.token)

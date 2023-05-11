@@ -119,12 +119,12 @@ type Runner struct {
 	trace                 bool
 	enablePrintStatements bool
 	runtime               *ast.Term
-	failureLine           bool
 	timeout               time.Duration
 	modules               map[string]*ast.Module
 	bundles               map[string]*bundle.Bundle
 	filter                string
 	target                string // target type (wasm, rego, etc.)
+	customBuiltins        []*Builtin
 }
 
 // NewRunner returns a new runner.
@@ -137,6 +137,16 @@ func NewRunner() *Runner {
 // SetCompiler sets the compiler used by the runner.
 func (r *Runner) SetCompiler(compiler *ast.Compiler) *Runner {
 	r.compiler = compiler
+	return r
+}
+
+type Builtin struct {
+	Decl *ast.Builtin
+	Func func(*rego.Rego)
+}
+
+func (r *Runner) AddCustomBuiltins(builtinsList []*Builtin) *Runner {
+	r.customBuiltins = builtinsList
 	return r
 }
 
@@ -185,12 +195,6 @@ func (r *Runner) EnableTracing(yes bool) *Runner {
 	if r.trace {
 		r.cover = nil
 	}
-	return r
-}
-
-// EnableFailureLine if set will provide the exact failure line
-func (r *Runner) EnableFailureLine(yes bool) *Runner {
-	r.failureLine = yes
 	return r
 }
 
@@ -282,19 +286,27 @@ func (r *Runner) runTests(ctx context.Context, txn storage.Transaction, enablePr
 	}
 
 	if r.compiler == nil {
+		capabilities := ast.CapabilitiesForThisVersion()
+
+		// Add custom builtins declarations to compiler
+		for _, builtin := range r.customBuiltins {
+			capabilities.Builtins = append(capabilities.Builtins, builtin.Decl)
+		}
+
 		r.compiler = ast.NewCompiler().
+			WithCapabilities(capabilities).
 			WithEnablePrintStatements(enablePrintStatements)
 	}
 
 	// rewrite duplicate test_* rule names as we compile modules
-	r.compiler.WithStageAfter("ResolveRefs", ast.CompilerStageDefinition{
+	r.compiler.WithStageAfter("RewriteRuleHeadRefs", ast.CompilerStageDefinition{
 		Name:       "RewriteDuplicateTestNames",
 		MetricName: "rewrite_duplicate_test_names",
 		Stage:      rewriteDuplicateTestNames,
 	})
 
 	if r.store == nil {
-		r.store = inmem.New()
+		r.store = inmem.NewWithOpts(inmem.OptRoundTripOnWrite(false))
 	}
 
 	if r.bundles != nil && len(r.bundles) > 0 {
@@ -328,7 +340,7 @@ func (r *Runner) runTests(ctx context.Context, txn storage.Transaction, enablePr
 		}
 	}
 
-	if r.modules != nil && len(r.modules) > 0 {
+	if len(r.modules) > 0 {
 		if r.compiler.Compile(r.modules); r.compiler.Failed() {
 			return nil, r.compiler.Errors
 		}
@@ -368,7 +380,7 @@ func (r *Runner) runTests(ctx context.Context, txn storage.Transaction, enablePr
 }
 
 func (r *Runner) shouldRun(rule *ast.Rule, testRegex *regexp.Regexp) bool {
-	ruleName := string(rule.Head.Name)
+	ruleName := ruleName(rule.Head)
 
 	// All tests must have the right prefix
 	if !strings.HasPrefix(ruleName, TestPrefix) && !strings.HasPrefix(ruleName, SkipTestPrefix) {
@@ -376,7 +388,7 @@ func (r *Runner) shouldRun(rule *ast.Rule, testRegex *regexp.Regexp) bool {
 	}
 
 	// Even with the prefix it needs to pass the regex (if applicable)
-	fullName := fmt.Sprintf("%s.%s", rule.Module.Package.Path.String(), ruleName)
+	fullName := rule.Ref().String()
 	if testRegex != nil && !testRegex.MatchString(fullName) {
 		return false
 	}
@@ -391,18 +403,42 @@ func rewriteDuplicateTestNames(compiler *ast.Compiler) *ast.Error {
 	count := map[string]int{}
 	for _, mod := range compiler.Modules {
 		for _, rule := range mod.Rules {
-			name := rule.Head.Name.String()
+			name := ruleName(rule.Head)
 			if !strings.HasPrefix(name, TestPrefix) {
 				continue
 			}
-			key := rule.Path().String()
+			key := rule.Ref().String()
 			if k, ok := count[key]; ok {
-				rule.Head.Name = ast.Var(fmt.Sprintf("%s#%02d", name, k))
+				ref := rule.Head.Ref()
+				newName := fmt.Sprintf("%s#%02d", name, k)
+				if len(ref) == 1 {
+					ref[0] = ast.VarTerm(newName)
+				} else {
+					ref[len(ref)-1] = ast.StringTerm(newName)
+				}
+				rule.Head.SetRef(ref)
 			}
 			count[key]++
 		}
 	}
 	return nil
+}
+
+// ruleName is a helper to be used when checking if a function
+// (a) is a test, or
+// (b) needs to be skipped
+// -- it'll resolve `p.q.r` to `r`. For representing results, we'll
+// use rule.Head.Ref()
+func ruleName(h *ast.Head) string {
+	ref := h.Ref()
+	switch last := ref[len(ref)-1].Value.(type) {
+	case ast.Var:
+		return string(last)
+	case ast.String:
+		return string(last)
+	default:
+		return ""
+	}
 }
 
 func (r *Runner) runTest(ctx context.Context, txn storage.Transaction, mod *ast.Module, rule *ast.Rule) (*Result, bool) {
@@ -415,15 +451,11 @@ func (r *Runner) runTest(ctx context.Context, txn storage.Transaction, mod *ast.
 	} else if r.trace {
 		bufferTracer = topdown.NewBufferTracer()
 		tracer = bufferTracer
-	} else if r.failureLine {
-		bufFailureLineTracer = topdown.NewBufferTracer()
-		tracer = bufFailureLineTracer
 	}
 
-	ruleName := string(rule.Head.Name)
-
-	if strings.HasPrefix(ruleName, SkipTestPrefix) {
-		tr := newResult(rule.Loc(), mod.Package.Path.String(), ruleName, 0*time.Second, nil, nil)
+	ruleName := ruleName(rule.Head)
+	if strings.HasPrefix(ruleName, SkipTestPrefix) { // TODO(sr): add test
+		tr := newResult(rule.Loc(), mod.Package.Path.String(), rule.Head.Ref().String(), 0*time.Second, nil, nil)
 		tr.Skip = true
 		return tr, false
 	}
@@ -441,6 +473,11 @@ func (r *Runner) runTest(ctx context.Context, txn storage.Transaction, mod *ast.
 		rego.PrintHook(topdown.NewPrintHook(printbuf)),
 	)
 
+	// Register custom builtins on rego instance
+	for _, v := range r.customBuiltins {
+		v.Func(rg)
+	}
+
 	t0 := time.Now()
 	rs, err := rg.Eval(ctx)
 	dt := time.Since(t0)
@@ -451,7 +488,7 @@ func (r *Runner) runTest(ctx context.Context, txn storage.Transaction, mod *ast.
 		trace = *bufferTracer
 	}
 
-	tr := newResult(rule.Loc(), mod.Package.Path.String(), ruleName, dt, trace, printbuf.Bytes())
+	tr := newResult(rule.Loc(), mod.Package.Path.String(), rule.Head.Ref().String(), dt, trace, printbuf.Bytes())
 	tr.Error = err
 	var stop bool
 
@@ -475,7 +512,7 @@ func (r *Runner) runBenchmark(ctx context.Context, txn storage.Transaction, mod 
 	tr := &Result{
 		Location: rule.Loc(),
 		Package:  mod.Package.Path.String(),
-		Name:     string(rule.Head.Name),
+		Name:     rule.Head.Ref().String(), // TODO(sr): test
 	}
 
 	var stop bool

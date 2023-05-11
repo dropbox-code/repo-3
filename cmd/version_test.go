@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"sort"
 	"strings"
 	"testing"
@@ -28,6 +27,7 @@ func TestGenerateCmdOutputDisableCheckFlag(t *testing.T) {
 		"Build Timestamp",
 		"Build Hostname",
 		"Go Version",
+		"Platform",
 		"WebAssembly",
 	})
 }
@@ -43,7 +43,7 @@ func TestGenerateCmdOutputWithCheckFlagNoError(t *testing.T) {
 	baseURL, teardown := getTestServer(exp, http.StatusOK)
 	defer teardown()
 
-	os.Setenv("OPA_TELEMETRY_SERVICE_URL", baseURL)
+	t.Setenv("OPA_TELEMETRY_SERVICE_URL", baseURL)
 
 	var stdout bytes.Buffer
 
@@ -55,6 +55,7 @@ func TestGenerateCmdOutputWithCheckFlagNoError(t *testing.T) {
 		"Build Timestamp",
 		"Build Hostname",
 		"Go Version",
+		"Platform",
 		"WebAssembly",
 		"Latest Upstream Version",
 		"Release Notes",
@@ -64,7 +65,7 @@ func TestGenerateCmdOutputWithCheckFlagNoError(t *testing.T) {
 
 func TestCheckOPAUpdateBadURL(t *testing.T) {
 	url := "http://foo:8112"
-	os.Setenv("OPA_TELEMETRY_SERVICE_URL", url)
+	t.Setenv("OPA_TELEMETRY_SERVICE_URL", url)
 
 	err := checkOPAUpdate(nil)
 	if err == nil {
@@ -75,9 +76,10 @@ func TestCheckOPAUpdateBadURL(t *testing.T) {
 func expectOutputKeys(t *testing.T, stdout string, expectedKeys []string) {
 	t.Helper()
 
-	var gotKeys []string
+	lines := strings.Split(strings.Trim(stdout, "\n"), "\n")
+	gotKeys := make([]string, 0, len(lines))
 
-	for _, line := range strings.Split(strings.Trim(stdout, "\n"), "\n") {
+	for _, line := range lines {
 		gotKeys = append(gotKeys, strings.Split(line, ":")[0])
 	}
 

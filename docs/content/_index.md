@@ -11,6 +11,11 @@ code and simple APIs to offload policy decision-making from your software. You
 can use OPA to enforce policies in microservices, Kubernetes, CI/CD pipelines,
 API gateways, and more.
 
+OPA was originally created by [Styra](https://www.styra.com) and is proud to be
+a graduated project in the [Cloud Native Computing Foundation
+(CNCF)](https://www.cncf.io/) landscape. For details read the CNCF
+[announcement](https://www.cncf.io/announcements/2021/02/04/cloud-native-computing-foundation-announces-open-policy-agent-graduation/).
+
 Read this page to learn about the core concepts in OPA's policy language
 ([Rego](policy-language)) as well as how to download, run, and integrate OPA.
 
@@ -103,18 +108,26 @@ Rego (pronounced "ray-go") is purpose-built for expressing policies over complex
 hierarchical data structures. For detailed information on Rego see the [Policy
 Language](policy-language) documentation.
 
-> 💡 The examples below are interactive! If you edit the input data above
+{{< info >}}
+💡 The examples below are interactive! If you edit the input data above
 containing servers, networks, and ports, the output will change below.
 Similarly, if you edit the queries or rules in the examples below the output
 will change. As you read through this section, try changing the input, queries,
 and rules and observe the difference in output.
->
-> 💻 They can also be run locally on your machine using the [`opa eval` command, here are setup instructions.](#running-opa)
+
+💻 They can also be run locally on your machine using the [`opa eval` command, here are setup instructions.](#running-opa)
+
+Note that the examples in this section try to represent the best practices.
+As such, they make use of keywords that are meant to become standard keywords
+at some point in time, but have been introduced gradually.
+[See the docs on _future keywords_](./policy-language/#future-keywords) for more information.
+{{< /info >}}
 
 ### References
 
 ```live:example/refs:module:hidden
 package example
+import future.keywords
 ```
 
 When OPA evaluates policies it binds data provided in the query to a global
@@ -151,6 +164,7 @@ input.deadbeef
 
 ```live:example/exprs:module:hidden
 package example
+import future.keywords
 ```
 
 To produce policy decisions in Rego you write expressions against input and
@@ -209,6 +223,7 @@ input.servers[0].protocols[0] == "telnet"
 
 ```live:example/vars:module:hidden
 package example
+import future.keywords
 ```
 
 You can store values in intermediate variables using the `:=` (assignment)
@@ -260,11 +275,14 @@ x != y  # y has not been assigned a value
 
 ```live:example/iter:module:hidden
 package example
+import future.keywords
 ```
 
-Like other declarative languages (e.g., SQL), Rego does not have an explicit
-loop or iteration construct. Instead, iteration happens implicitly when you
-inject variables into expressions.
+Like other declarative languages (e.g., SQL), iteration in Rego happens
+implicitly when you inject variables into expressions.
+
+There are explicit iteration constructs to express _FOR ALL_ and _FOR SOME_, [see
+below](#for-some-and-for-all).
 
 To understand how iteration works in Rego, imagine you need to check if any
 networks are public. Recall that the networks are supplied inside an array:
@@ -352,10 +370,120 @@ some i; input.servers[i].protocols[i] == "ssh"  # there is no assignment of i th
 ```live:example/iter/undefined:output:expect_undefined
 ```
 
+#### FOR SOME and FOR ALL
+
+While plain iteration serves as a powerful building block, Rego also features ways
+to express _FOR SOME_ and _FOR ALL_ more explicitly.
+
+{{< info >}}
+To ensure backwards-compatibility, the keywords discussed below introduced slowly.
+In the first stage, users can opt-in to using the new keywords via a special import:
+`import future.keywords.every` introduces the `every` keyword described here.
+(Importing `every` means also importing `in` without an extra `import` statement.)
+
+At some point in the future, the keyword will become _standard_, and the import will
+become a no-op that can safely be removed. This should give all users ample time to
+update their policies, so that the new keyword will not cause clashes with existing
+variable names.
+[See the docs on _future keywords_](./policy-language/#future-keywords) for more information.
+{{< /info >}}
+
+##### FOR SOME (`some`)
+
+`some ... in ...` is used to iterate over the collection (its last argument),
+and will bind its variables (key, value position) to the collection items.
+It introduces new bindings to the evaluation of the rest of the rule body.
+
+Using `some`, we can express the rules introduced above in different ways:
+
+```live:example/iter/some1:module:merge_down
+public_network contains net.id if {
+    some net in input.networks # some network exists and..
+    net.public                 # it is public.
+}
+
+shell_accessible contains server.id if {
+    some server in input.servers
+    "telnet" in server.protocols
+}
+
+shell_accessible contains server.id if {
+    some server in input.servers
+    "ssh" in server.protocols
+}
+```
+```live:example/iter/some1:query:merge_down
+shell_accessible
+```
+```live:example/iter/some1:output
+```
+
+For details on `some ... in ...`, see [the documentation of the `in` operator](policy-language/#membership-and-iteration-in).
+
+##### FOR ALL (`every`)
+
+Expanding on the examples above, `every` allows us to succinctly express that
+a condition holds for all elements of a domain.
+
+```live:example/iter/every2:module:merge_down
+no_telnet_exposed if {
+    every server in input.servers {
+        every protocol in server.protocols {
+            "telnet" != protocol
+        }
+    }
+}
+
+no_telnet_exposed_alt if { # alternative: every + not-in
+    every server in input.servers {
+        not "telnet" in server.protocols
+    }
+}
+
+no_telnet_exposed_alt2 if { # alternative: not + rule + some
+    not any_telnet_exposed
+}
+
+any_telnet_exposed if {
+    some server in input.servers
+    "telnet" in server.protocols
+}
+```
+```live:example/iter/every2:input:merge_down
+{
+    "servers": [
+        {
+            "id": "busybox",
+            "protocols": ["http", "ftp"]
+        },
+        {
+            "id": "db",
+            "protocols": ["mysql", "ssh"]
+        },
+        {
+            "id": "web",
+            "protocols": ["https"]
+        }
+    ]
+}
+```
+```live:example/iter/every2:query:merge_down
+no_telnet_exposed
+```
+```live:example/iter/every2:output
+```
+
+For all the details, see [Every Keyword](policy-language/#every-keyword).
+
 ### Rules
 
 Rego lets you encapsulate and re-use logic with rules. Rules are just if-then
 logic statements. Rules can either be "complete" or "partial".
+
+```live:example/complete:module:hidden
+package example.rules
+import future.keywords
+```
 
 #### Complete Rules
 
@@ -363,18 +491,16 @@ Complete rules are if-then statements that assign a single value to a variable.
 For example:
 
 ```live:example/complete/1:module:openable
-package example.rules
-
-any_public_networks = true {  # is true if...
-    net := input.networks[_]  # some network exists and..
-    net.public                # it is public.
+any_public_networks := true if {
+    some net in input.networks # some network exists and..
+    net.public                 # it is public.
 }
 ```
 
-Every rule consists of a _head_ and a _body_. In Rego we say the rule head is
-true _if_ the rule body is true for some set of variable assignments. In the
-example above `any_public_networks = true` is the head and `net :=
-input.networks[_]; net.public` is the body.
+Every rule consists of a _head_ and a _body_. In Rego we say the rule head
+is true _if_ the rule body is true for some set of variable assignments. In
+the example above `any_public_networks := true` is the head and `some net in
+input.networks; net.public` is the body.
 
 You can query for the value generated by rules just like any other value:
 
@@ -399,11 +525,9 @@ data.example.rules.any_public_networks
 If you omit the `= <value>` part of the rule head the value defaults to `true`.
 You could rewrite the example above as follows without changing the meaning:
 
-```live:example/complete_elided:module:read_only,openable
-package example.rules
-
-any_public_networks {
-    net := input.networks[_]
+```live:example/complete/elided:module:read_only,openable
+any_public_networks if {
+    some net in input.networks
     net.public
 }
 ```
@@ -414,7 +538,7 @@ to `true`. Since the rule body is true, the rule head is always true/defined.
 ```live:example/complete_constant:module:openable
 package example.constants
 
-pi = 3.14
+pi := 3.14
 ```
 
 Constants defined like this can be queried just like any other values:
@@ -447,15 +571,18 @@ any_public_networks
 
 #### Partial Rules
 
+```live:example/partial_set:module:hidden
+package example
+import future.keywords
+```
+
 Partial rules are if-then statements that generate a set of values and
 assign that set to a variable. For example:
 
-```live:example/partial_set:module:openable
-package example.rules
-
-public_network[net.id] {      # net.id is in the public_network set if...
-    net := input.networks[_]  # some network exists and...
-    net.public                # it is public.
+```live:example/partial_set/1:module:openable
+public_network contains net.id if {
+    some net in input.networks # some network exists and..
+    net.public                 # it is public.
 }
 ```
 
@@ -463,27 +590,44 @@ In the example above `public_network[net.id]` is the rule head and `net :=
 input.networks[_]; net.public` is the rule body. You can query for the entire
 set of values just like any other value:
 
-```live:example/partial_set/extent:query:merge_down
+```live:example/partial_set/1/extent:query:merge_down
 public_network
 ```
-```live:example/partial_set/extent:output
+```live:example/partial_set/1/extent:output
 ```
 
-You can iterate over the set of values by referencing the set elements with a
+Iteration over the set of values can be done with the `some ... in ...` expression:
+
+```live:example/partial_set/1/iteration_some:query:merge_down
+some net in public_network
+```
+```live:example/partial_set/1/iteration_some:output
+```
+
+With a literal, or a bound variable, you can check if the value exists in the set
+via `... in ...`:
+
+```live:example/partial_set/1/exists_in:query:merge_down
+"net3" in public_network
+```
+```live:example/partial_set/1/exists_in:output
+```
+
+You can also iterate over the set of values by referencing the set elements with a
 variable:
 
-```live:example/partial_set/iteration:query:merge_down
+```live:example/partial_set/1/iteration:query:merge_down
 some n; public_network[n]
 ```
-```live:example/partial_set/iteration:output
+```live:example/partial_set/1/iteration:output
 ```
 
 Lastly, you can check if a value exists in the set using the same syntax:
 
-```live:example/partial_set/exists:query:merge_down
+```live:example/partial_set/1/exists:query:merge_down
 public_network["net3"]
 ```
-```live:example/partial_set/exists:output
+```live:example/partial_set/1/exists:output
 ```
 
 In addition to partially defining sets, You can also partially define key/value
@@ -505,13 +649,13 @@ protocols:
 ```live:example/logical_or/complete:module:openable,merge_down
 package example.logical_or
 
-default shell_accessible = false
+default shell_accessible := false
 
-shell_accessible = true {
+shell_accessible := true {
     input.servers[_].protocols[_] == "telnet"
 }
 
-shell_accessible = true {
+shell_accessible := true {
     input.servers[_].protocols[_] == "ssh"
 }
 ```
@@ -581,7 +725,6 @@ shell_accessible
 ```
 
 <!---TBD: explain conflicts --->
-
 ### Putting It Together
 
 The sections above explain the core concepts in Rego. To put it all together
@@ -600,28 +743,32 @@ For example:
 
 ```live:example/final:module:openable,merge_down
 package example
+import future.keywords.every # "every" implies "in"
 
-allow = true {                                      # allow is true if...
+allow := true {                                     # allow is true if...
     count(violation) == 0                           # there are zero violations.
 }
 
 violation[server.id] {                              # a server is in the violation set if...
-    some server
-    public_server[server]                           # it exists in the 'public_server' set and...
-    server.protocols[_] == "http"                   # it contains the insecure "http" protocol.
+    some server in public_servers                   # it exists in the 'public_servers' set and...
+    "http" in server.protocols                      # it contains the insecure "http" protocol.
 }
 
 violation[server.id] {                              # a server is in the violation set if...
-    server := input.servers[_]                      # it exists in the input.servers collection and...
-    server.protocols[_] == "telnet"                 # it contains the "telnet" protocol.
+    some server in input.servers                    # it exists in the input.servers collection and...
+    "telnet" in server.protocols                    # it contains the "telnet" protocol.
 }
 
-public_server[server] {                             # a server exists in the public_server set if...
-    some i, j
-    server := input.servers[_]                      # it exists in the input.servers collection and...
-    server.ports[_] == input.ports[i].id            # it references a port in the input.ports collection and...
-    input.ports[i].network == input.networks[j].id  # the port references a network in the input.networks collection and...
-    input.networks[j].public                        # the network is public.
+public_servers[server] {                            # a server exists in the public_servers set if...
+    some server in input.servers                    # it exists in the input.servers collection and...
+
+    some port in server.ports                       # it references a port in the input.ports collection and...
+    some input_port in input.ports
+    port == input_port.id
+
+    some input_network in input.networks            # the port references a network in the input.networks collection and...
+    input_port.network == input_network.id
+    input_network.public                            # the network is public.
 }
 ```
 ```live:example/final:query:merge_down
@@ -651,9 +798,12 @@ On Linux (64-bit):
 curl -L -o opa https://openpolicyagent.org/downloads/{{< current_version >}}/opa_linux_amd64_static
 ```
 
-> Windows users can obtain the OPA executable from [here](https://openpolicyagent.org/downloads/{{< current_version >}}/opa_windows_amd64.exe).
-> The steps below
-> are the same for Windows users except the executable name will be different.
+{{< info >}}
+Windows users can obtain the OPA executable from [here](https://openpolicyagent.org/downloads/{{< current_version >}}/opa_windows_amd64.exe).
+The steps below are the same for Windows users except the executable name will be different.  
+Windows executable file name is opa_windows_amd64.exe, which inclues file extension name 'exe'. The checksums file name is opa_windows_amd64.exe.sha256.  
+Windows users can obtain the checksums from [here](https://openpolicyagent.org/downloads/{{< current_version >}}/opa_windows_amd64.exe.sha256).
+{{< /info >}}
 
 Set permissions on the OPA executable:
 
@@ -661,12 +811,16 @@ Set permissions on the OPA executable:
 chmod 755 ./opa
 ```
 
-> You can also download and run OPA via Docker. The latest stable image tag is
-> `openpolicyagent/opa:{{< current_docker_version >}}`.
+{{< info >}}
+You can also download and run OPA via Docker. The latest stable image tag is
+`openpolicyagent/opa:latest`.
+{{< /info >}}
 
 #### Checksums
-Checksums for all binaries are available in the download path by appending `.sha256` to the binary filename. 
+
+Checksums for all binaries are available in the download path by appending `.sha256` to the binary filename.
 Verify the macOS binary checksum:
+
 ```shell
 curl -L -o opa_darwin_amd64 https://openpolicyagent.org/downloads/{{< current_version >}}/opa_darwin_amd64
 curl -L -o opa_darwin_amd64.sha256 https://openpolicyagent.org/downloads/{{< current_version >}}/opa_darwin_amd64.sha256
@@ -675,14 +829,14 @@ shasum -c opa_darwin_amd64.sha256
 
 ### 2. Try `opa eval`
 
-The simplest way to interact with OPA is via the command-line using the `opa
-eval` sub-command. `opa eval` is a swiss-army knife that you can use to evaluate
-arbitrary Rego expressions and policies. `opa eval` supports a large number of
-options for controlling evaluation. Commonly used flags include:
+The simplest way to interact with OPA is via the command-line using the [`opa eval` sub-command](cli/#opa-eval).
+It is a swiss-army knife that you can use to evaluate arbitrary Rego expressions and policies.
+`opa eval` supports a large number of options for controlling evaluation.
+Commonly used flags include:
 
 | Flag | Short | Description |
 | --- | --- | --- |
-| `--bundle` | `-b`| Load a bundle file or directory into OPA. This flag can be repeated. |
+| `--bundle` | `-b`| Load a [bundle file](management-bundles/#bundle-file-format) or directory into OPA. This flag can be repeated. |
 | `--data` | `-d` | Load policy or data files into OPA. This flag can be repeated. |
 | `--input` | `-i` | Load a data file and use it as `input`. This flag cannot be repeated. |
 | `--format` | `-f` | Set the output format to use. The default is `json` and is intended for programmatic use. The `pretty` format emits more human-readable output. |
@@ -721,9 +875,9 @@ For example:
 ```live:example/using_opa:module:openable,read_only
 package example
 
-default allow = false                               # unless otherwise defined, allow is false
+default allow := false                              # unless otherwise defined, allow is false
 
-allow = true {                                      # allow is true if...
+allow := true {                                     # allow is true if...
     count(violation) == 0                           # there are zero violations.
 }
 
@@ -761,8 +915,9 @@ echo $?
 
 ### 3. Try `opa run` (interactive)
 
-OPA includes an interactive shell or REPL (Read-Eval-Print-Loop). You can use
-the REPL to experiment with policies and prototype new ones.
+OPA includes an interactive shell or REPL (Read-Eval-Print-Loop) accessible via
+the [`opa run` sub-command](cli/#opa-run).
+You can use the REPL to experiment with policies and prototype new ones.
 
 To start the REPL just:
 
@@ -838,10 +993,12 @@ opa run example.rego repl.input:input.json
 > data.example.public_server[s]
 ```
 
-> 💡 Prefixing file paths with a reference controls where file is loaded under
-> `data`. By convention, the REPL sets the `input` document that queries see by
-> reading `data.repl.input` each time a statement is evaluated. See `help input`
-> for details in the REPL.
+{{< info >}}
+Prefixing file paths with a reference controls where file is loaded under
+`data`. By convention, the REPL sets the `input` document that queries see by
+reading `data.repl.input` each time a statement is evaluated. See `help input`
+for details in the REPL.
+{{< /info >}}
 
 Quit out of the REPL by pressing Control-D or typing `exit`:
 

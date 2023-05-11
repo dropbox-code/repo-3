@@ -7,13 +7,16 @@ package init
 import (
 	"context"
 	"io"
+	"io/fs"
+	"os"
 	"path"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/open-policy-agent/opa/loader"
 	"github.com/open-policy-agent/opa/storage"
-	"github.com/open-policy-agent/opa/storage/inmem"
+	inmem "github.com/open-policy-agent/opa/storage/inmem/test"
 	"github.com/open-policy-agent/opa/util"
 	"github.com/open-policy-agent/opa/util/test"
 	"github.com/open-policy-agent/opa/version"
@@ -103,81 +106,80 @@ p = true { 1 = 2 }`
 
 	ctx := context.Background()
 
-	for _, tc := range tests {
-		t.Run(tc.note, func(t *testing.T) {
-			test.WithTempFS(tc.fs, func(rootDir string) {
+	for _, useMemoryFS := range []bool{false, true} {
+		for _, tc := range tests {
+			t.Run(tc.note, func(t *testing.T) {
+				test.WithTestFS(tc.fs, useMemoryFS, func(rootDir string, fsys fs.FS) {
+					paths := []string{}
 
-				paths := []string{}
-
-				for _, fileName := range tc.loadParams {
-					paths = append(paths, filepath.Join(rootDir, fileName))
-				}
-
-				// Create a new store and perform a file load/insert sequence.
-				store := inmem.New()
-
-				err := storage.Txn(ctx, store, storage.WriteParams, func(txn storage.Transaction) error {
-
-					loaded, err := LoadPaths(paths, nil, tc.asBundle, nil, true)
-					if err != nil {
-						return err
+					for _, fileName := range tc.loadParams {
+						paths = append(paths, filepath.Join(rootDir, fileName))
 					}
+					// Create a new store and perform a file load/insert sequence.
+					store := inmem.New()
 
-					_, err = InsertAndCompile(ctx, InsertAndCompileOptions{
-						Store:     store,
-						Txn:       txn,
-						Files:     loaded.Files,
-						Bundles:   loaded.Bundles,
-						MaxErrors: -1,
+					err := storage.Txn(ctx, store, storage.WriteParams, func(txn storage.Transaction) error {
+						loaded, err := LoadPaths(paths, nil, tc.asBundle, nil, true, false, nil, fsys)
+						if err != nil {
+							return err
+						}
+
+						_, err = InsertAndCompile(ctx, InsertAndCompileOptions{
+							Store:     store,
+							Txn:       txn,
+							Files:     loaded.Files,
+							Bundles:   loaded.Bundles,
+							MaxErrors: -1,
+						})
+
+						return err
 					})
 
-					return err
-				})
-
-				if err != nil {
-					t.Fatal(err)
-				}
-
-				// Verify the loading was successful as expected.
-				txn := storage.NewTransactionOrDie(ctx, store)
-
-				for storePath, expected := range tc.expectedData {
-					node, err := store.Read(ctx, txn, storage.MustParsePath(storePath))
-					if util.Compare(node, expected) != 0 || err != nil {
-						t.Fatalf("Expected %v but got %v (err: %v)", expected, node, err)
-					}
-				}
-
-				ids, err := store.ListPolicies(ctx, txn)
-				if err != nil {
-					t.Fatal(err)
-				}
-
-				if len(tc.expectedMods) != len(ids) {
-					t.Fatalf("Expected %d modules, got %d", len(tc.expectedMods), len(ids))
-				}
-
-				actualMods := map[string]struct{}{}
-				for _, id := range ids {
-					result, err := store.GetPolicy(ctx, txn, id)
 					if err != nil {
-						t.Fatalf("Unexpected error: %s", err)
+						t.Fatal(err)
 					}
-					actualMods[string(result)] = struct{}{}
-				}
 
-				for _, expectedMod := range tc.expectedMods {
-					if _, found := actualMods[expectedMod]; !found {
-						t.Fatalf("Expected %v but got: %v", expectedMod, actualMods)
+					// Verify the loading was successful as expected.
+					txn := storage.NewTransactionOrDie(ctx, store)
+
+					for storePath, expected := range tc.expectedData {
+						node, err := store.Read(ctx, txn, storage.MustParsePath(storePath))
+						if util.Compare(node, expected) != 0 || err != nil {
+							t.Fatalf("Expected %v but got %v (err: %v)", expected, node, err)
+						}
 					}
-				}
 
-				_, err = store.Read(ctx, txn, storage.MustParsePath("/system/version"))
-				if err != nil {
-					t.Fatal(err)
-				}
+					ids, err := store.ListPolicies(ctx, txn)
+					if err != nil {
+						t.Fatal(err)
+					}
+
+					if len(tc.expectedMods) != len(ids) {
+						t.Fatalf("Expected %d modules, got %d", len(tc.expectedMods), len(ids))
+					}
+
+					actualMods := map[string]struct{}{}
+					for _, id := range ids {
+						result, err := store.GetPolicy(ctx, txn, id)
+						if err != nil {
+							t.Fatalf("Unexpected error: %s", err)
+						}
+						actualMods[string(result)] = struct{}{}
+					}
+
+					for _, expectedMod := range tc.expectedMods {
+						if _, found := actualMods[expectedMod]; !found {
+							t.Fatalf("Expected %v but got: %v", expectedMod, actualMods)
+						}
+					}
+
+					_, err = store.Read(ctx, txn, storage.MustParsePath("/system/version"))
+					if err != nil {
+						t.Fatal(err)
+					}
+				})
 			})
-		})
+		}
 	}
 }
 
@@ -248,6 +250,42 @@ func TestWalkPaths(t *testing.T) {
 			if _, ok := files[path]; !ok {
 				t.Fatalf("unexpected file %v", path)
 			}
+		}
+	})
+}
+
+func TestLoadPathsBundleModeWithFilter(t *testing.T) {
+	files := map[string]string{
+		"a/data.json":      `{"foo": "not-bar"}`,
+		"policy.rego":      "package foo\n p = 1",
+		"policy_test.rego": "package foo\n test_p { p }",
+		"a/.manifest":      `{"roots": ["a", "foo"]}`,
+	}
+
+	test.WithTempFS(files, func(rootDir string) {
+
+		paths := []string{rootDir}
+
+		// bundle mode
+		loaded, err := LoadPaths(paths, func(abspath string, info os.FileInfo, depth int) bool {
+			return loader.GlobExcludeName("*_test.rego", 1)(abspath, info, depth)
+		}, true, nil, true, false, nil, nil)
+		if err != nil {
+			t.Fatalf("Unexpected error: %s", err)
+		}
+
+		if len(loaded.Bundles) != len(paths) {
+			t.Fatalf("Expected %v bundle loaders but got %v", len(paths), len(loaded.Bundles))
+		}
+
+		b, ok := loaded.Bundles[rootDir]
+		if !ok {
+			t.Fatalf("expected bundle %v", rootDir)
+		}
+
+		expected := 1
+		if len(b.Modules) != expected {
+			t.Fatalf("expected %v module but got %v", expected, len(b.Modules))
 		}
 	})
 }

@@ -16,7 +16,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/bytecodealliance/wasmtime-go"
+	wasmtime "github.com/bytecodealliance/wasmtime-go/v3"
 
 	"github.com/open-policy-agent/opa/ast"
 	"github.com/open-policy-agent/opa/metrics"
@@ -81,7 +81,13 @@ func (d *builtinDispatcher) SetMap(m map[int32]topdown.BuiltinFunc) {
 }
 
 // Reset is called in Eval before using the builtinDispatcher.
-func (d *builtinDispatcher) Reset(ctx context.Context, seed io.Reader, ns time.Time, iqbCache cache.InterQueryCache, ph print.Hook) {
+func (d *builtinDispatcher) Reset(ctx context.Context,
+	seed io.Reader,
+	ns time.Time,
+	iqbCache cache.InterQueryCache,
+	ndbCache builtins.NDBCache,
+	ph print.Hook,
+	capabilities *ast.Capabilities) {
 	if ns.IsZero() {
 		ns = time.Now()
 	}
@@ -102,7 +108,9 @@ func (d *builtinDispatcher) Reset(ctx context.Context, seed io.Reader, ns time.T
 		QueryID:                0,
 		ParentID:               0,
 		InterQueryBuiltinCache: iqbCache,
+		NDBuiltinCache:         ndbCache,
 		PrintHook:              ph,
+		Capabilities:           capabilities,
 	}
 
 }

@@ -7,14 +7,16 @@ package topdown
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/open-policy-agent/opa/ast"
 	"github.com/open-policy-agent/opa/storage"
-	"github.com/open-policy-agent/opa/storage/inmem"
+	inmem "github.com/open-policy-agent/opa/storage/inmem/test"
 	"github.com/open-policy-agent/opa/test/cases"
+	"github.com/open-policy-agent/opa/topdown/builtins"
 )
 
 func TestRego(t *testing.T) {
@@ -33,7 +35,19 @@ func TestOPARego(t *testing.T) {
 	}
 }
 
-func testRun(t *testing.T, tc cases.TestCase) {
+func TestRegoWithNDBCache(t *testing.T) {
+	for _, tc := range cases.MustLoad("../test/cases/testdata").Sorted().Cases {
+		t.Run(tc.Note, func(t *testing.T) {
+			testRun(t, tc, func(q *Query) *Query {
+				return q.WithNDBuiltinCache(builtins.NDBCache{})
+			})
+		})
+	}
+}
+
+type opt func(*Query) *Query
+
+func testRun(t *testing.T, tc cases.TestCase, opts ...opt) {
 
 	ctx := context.Background()
 
@@ -67,13 +81,20 @@ func testRun(t *testing.T, tc cases.TestCase) {
 		input = ast.NewTerm(ast.MustInterfaceToValue(*tc.Input))
 	}
 
-	rs, err := NewQuery(query).
+	buf := NewBufferTracer()
+	q := NewQuery(query).
 		WithCompiler(compiler).
 		WithStore(store).
 		WithTransaction(txn).
 		WithInput(input).
 		WithStrictBuiltinErrors(tc.StrictError).
-		Run(ctx)
+		WithTracer(buf)
+
+	for _, o := range opts {
+		q = o(q)
+	}
+
+	rs, err := q.Run(ctx)
 
 	if tc.WantError != nil {
 		testAssertErrorText(t, *tc.WantError, err)
@@ -93,6 +114,10 @@ func testRun(t *testing.T, tc cases.TestCase) {
 
 	if tc.WantResult == nil && tc.WantErrorCode == nil && tc.WantError == nil {
 		t.Fatal("expected one of: 'want_result', 'want_error_code', or 'want_error'")
+	}
+
+	if testing.Verbose() {
+		PrettyTrace(os.Stderr, *buf)
 	}
 }
 

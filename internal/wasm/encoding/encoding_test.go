@@ -6,7 +6,7 @@ package encoding
 
 import (
 	"bytes"
-	"io/ioutil"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -17,7 +17,7 @@ import (
 
 func TestRoundtrip(t *testing.T) {
 
-	bs, err := ioutil.ReadFile(filepath.Join("testdata", "test1.wasm"))
+	bs, err := os.ReadFile(filepath.Join("testdata", "test1.wasm"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,11 +63,7 @@ func TestRoundtrip(t *testing.T) {
 
 func TestRoundtripOPA(t *testing.T) {
 
-	bs, err := opa.Bytes()
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	bs := opa.Bytes()
 	module1, err := ReadModule(bytes.NewBuffer(bs))
 	if err != nil {
 		t.Fatal(err)

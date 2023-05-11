@@ -136,16 +136,8 @@ func (tc *typeChecker) CheckBody(env *TypeEnv, body Body) (*TypeEnv, Errors) {
 // CheckTypes runs type checking on the rules returns a TypeEnv if no errors
 // are found. The resulting TypeEnv wraps the provided one. The resulting
 // TypeEnv will be able to resolve types of refs that refer to rules.
-func (tc *typeChecker) CheckTypes(env *TypeEnv, sorted []util.T) (*TypeEnv, Errors) {
+func (tc *typeChecker) CheckTypes(env *TypeEnv, sorted []util.T, as *AnnotationSet) (*TypeEnv, Errors) {
 	env = tc.newEnv(env)
-	var as *annotationSet
-	if tc.ss != nil {
-		var errs Errors
-		as, errs = buildAnnotationSet(sorted)
-		if len(errs) > 0 {
-			return env, errs
-		}
-	}
 	for _, s := range sorted {
 		tc.checkRule(env, as, s.(*Rule))
 	}
@@ -181,7 +173,7 @@ func (tc *typeChecker) checkClosures(env *TypeEnv, expr *Expr) Errors {
 	return result
 }
 
-func (tc *typeChecker) checkRule(env *TypeEnv, as *annotationSet, rule *Rule) {
+func (tc *typeChecker) checkRule(env *TypeEnv, as *AnnotationSet, rule *Rule) {
 
 	env = env.wrap()
 
@@ -190,6 +182,9 @@ func (tc *typeChecker) checkRule(env *TypeEnv, as *annotationSet, rule *Rule) {
 			ref, refType, err := processAnnotation(tc.ss, schemaAnnot, rule, tc.allowNet)
 			if err != nil {
 				tc.err([]*Error{err})
+				continue
+			}
+			if ref == nil && refType == nil {
 				continue
 			}
 			prefixRef, t := getPrefix(env, ref)
@@ -208,7 +203,7 @@ func (tc *typeChecker) checkRule(env *TypeEnv, as *annotationSet, rule *Rule) {
 
 	cpy, err := tc.CheckBody(env, rule.Body)
 	env = env.next
-	path := rule.Path()
+	path := rule.Ref()
 
 	if len(err) > 0 {
 		// if the rule/function contains an error, add it to the type env so
@@ -221,7 +216,6 @@ func (tc *typeChecker) checkRule(env *TypeEnv, as *annotationSet, rule *Rule) {
 	var tpe types.Type
 
 	if len(rule.Head.Args) > 0 {
-
 		// If args are not referred to in body, infer as any.
 		WalkVars(rule.Head.Args, func(v Var) bool {
 			if cpy.Get(v) == nil {
@@ -243,23 +237,28 @@ func (tc *typeChecker) checkRule(env *TypeEnv, as *annotationSet, rule *Rule) {
 		tpe = types.Or(exist, f)
 
 	} else {
-		switch rule.Head.DocKind() {
-		case CompleteDoc:
+		switch rule.Head.RuleKind() {
+		case SingleValue:
 			typeV := cpy.Get(rule.Head.Value)
-			if typeV != nil {
-				exist := env.tree.Get(path)
-				tpe = types.Or(typeV, exist)
+			if last := path[len(path)-1]; !last.IsGround() {
+
+				// e.g. store object[string: whatever] at data.p.q.r, not data.p.q.r[x]
+				path = path.GroundPrefix()
+
+				typeK := cpy.Get(last)
+				if typeK != nil && typeV != nil {
+					exist := env.tree.Get(path)
+					typeV = types.Or(types.Values(exist), typeV)
+					typeK = types.Or(types.Keys(exist), typeK)
+					tpe = types.NewObject(nil, types.NewDynamicProperty(typeK, typeV))
+				}
+			} else {
+				if typeV != nil {
+					exist := env.tree.Get(path)
+					tpe = types.Or(typeV, exist)
+				}
 			}
-		case PartialObjectDoc:
-			typeK := cpy.Get(rule.Head.Key)
-			typeV := cpy.Get(rule.Head.Value)
-			if typeK != nil && typeV != nil {
-				exist := env.tree.Get(path)
-				typeV = types.Or(types.Values(exist), typeV)
-				typeK = types.Or(types.Keys(exist), typeK)
-				tpe = types.NewObject(nil, types.NewDynamicProperty(typeK, typeV))
-			}
-		case PartialSetDoc:
+		case MultiValue:
 			typeK := cpy.Get(rule.Head.Key)
 			if typeK != nil {
 				exist := env.tree.Get(path)
@@ -275,6 +274,9 @@ func (tc *typeChecker) checkRule(env *TypeEnv, as *annotationSet, rule *Rule) {
 }
 
 func (tc *typeChecker) checkExpr(env *TypeEnv, expr *Expr) *Error {
+	if err := tc.checkExprWith(env, expr, 0); err != nil {
+		return err
+	}
 	if !expr.IsCall() {
 		return nil
 	}
@@ -319,17 +321,19 @@ func (tc *typeChecker) checkExprBuiltin(env *TypeEnv, expr *Expr) *Error {
 	}
 
 	fargs := ftpe.FuncArgs()
+	namedFargs := ftpe.NamedFuncArgs()
 
 	if ftpe.Result() != nil {
 		fargs.Args = append(fargs.Args, ftpe.Result())
+		namedFargs.Args = append(namedFargs.Args, ftpe.NamedResult())
 	}
 
 	if len(args) > len(fargs.Args) && fargs.Variadic == nil {
-		return newArgError(expr.Location, name, "too many arguments", pre, fargs)
+		return newArgError(expr.Location, name, "too many arguments", pre, namedFargs)
 	}
 
 	if len(args) < len(ftpe.FuncArgs().Args) {
-		return newArgError(expr.Location, name, "too few arguments", pre, fargs)
+		return newArgError(expr.Location, name, "too few arguments", pre, namedFargs)
 	}
 
 	for i := range args {
@@ -338,7 +342,7 @@ func (tc *typeChecker) checkExprBuiltin(env *TypeEnv, expr *Expr) *Error {
 			for i := range args {
 				post[i] = env.Get(args[i])
 			}
-			return newArgError(expr.Location, name, "invalid argument(s)", post, fargs)
+			return newArgError(expr.Location, name, "invalid argument(s)", post, namedFargs)
 		}
 	}
 
@@ -371,6 +375,27 @@ func (tc *typeChecker) checkExprEq(env *TypeEnv, expr *Expr) *Error {
 	}
 
 	return nil
+}
+
+func (tc *typeChecker) checkExprWith(env *TypeEnv, expr *Expr, i int) *Error {
+	if i == len(expr.With) {
+		return nil
+	}
+
+	target, value := expr.With[i].Target, expr.With[i].Value
+	targetType, valueType := env.Get(target), env.Get(value)
+
+	if t, ok := targetType.(*types.Function); ok { // built-in function replacement
+		switch v := valueType.(type) {
+		case *types.Function: // ...by function
+			if !unifies(targetType, valueType) {
+				return newArgError(expr.With[i].Loc(), target.Value.(Ref), "arity mismatch", v.Args(), t.NamedFuncArgs())
+			}
+		default: // ... by value, nothing to check
+		}
+	}
+
+	return tc.checkExprWith(env, expr, i+1)
 }
 
 func unify2(env *TypeEnv, a *Term, typeA types.Type, b *Term, typeB types.Type) bool {
@@ -618,11 +643,11 @@ func (rc *refChecker) Visit(x interface{}) bool {
 }
 
 func (rc *refChecker) checkApply(curr *TypeEnv, ref Ref) *Error {
-	if tpe := curr.Get(ref); tpe != nil {
-		if _, ok := tpe.(*types.Function); ok {
-			return newRefErrUnsupported(ref[0].Location, rc.varRewriter(ref), len(ref)-1, tpe)
-		}
+	switch tpe := curr.Get(ref).(type) {
+	case *types.Function: // NOTE(sr): We don't support first-class functions, except for `with`.
+		return newRefErrUnsupported(ref[0].Location, rc.varRewriter(ref), len(ref)-1, tpe)
 	}
+
 	return nil
 }
 
@@ -634,72 +659,57 @@ func (rc *refChecker) checkRef(curr *TypeEnv, node *typeTreeNode, ref Ref, idx i
 
 	head := ref[idx]
 
-	// Handle constant ref operands, i.e., strings or the ref head.
-	if _, ok := head.Value.(String); ok || idx == 0 {
-
-		child := node.Child(head.Value)
-		if child == nil {
-
-			if curr.next != nil {
-				next := curr.next
-				return rc.checkRef(next, next.tree, ref, 0)
-			}
-
-			if RootDocumentNames.Contains(ref[0]) {
-				return rc.checkRefLeaf(types.A, ref, 1)
-			}
-
-			return rc.checkRefLeaf(types.A, ref, 0)
+	// NOTE(sr): as long as package statements are required, this isn't possible:
+	// the shortest possible rule ref is data.a.b (b is idx 2), idx 1 and 2 need to
+	// be strings or vars.
+	if idx == 1 || idx == 2 {
+		switch head.Value.(type) {
+		case Var, String: // OK
+		default:
+			have := rc.env.Get(head.Value)
+			return newRefErrInvalid(ref[0].Location, rc.varRewriter(ref), idx, have, types.S, getOneOfForNode(node))
 		}
-
-		if child.Leaf() {
-			return rc.checkRefLeaf(child.Value(), ref, idx+1)
-		}
-
-		return rc.checkRef(curr, child, ref, idx+1)
 	}
 
-	// Handle dynamic ref operands.
-	switch value := head.Value.(type) {
-
-	case Var:
-
-		if exist := rc.env.Get(value); exist != nil {
-			if !unifies(types.S, exist) {
-				return newRefErrInvalid(ref[0].Location, rc.varRewriter(ref), idx, exist, types.S, getOneOfForNode(node))
+	if v, ok := head.Value.(Var); ok && idx != 0 {
+		tpe := types.Keys(rc.env.getRefRecExtent(node))
+		if exist := rc.env.Get(v); exist != nil {
+			if !unifies(tpe, exist) {
+				return newRefErrInvalid(ref[0].Location, rc.varRewriter(ref), idx, exist, tpe, getOneOfForNode(node))
 			}
 		} else {
-			rc.env.tree.PutOne(value, types.S)
+			rc.env.tree.PutOne(v, tpe)
 		}
-
-	case Ref:
-
-		exist := rc.env.Get(value)
-		if exist == nil {
-			// If ref type is unknown, an error will already be reported so
-			// stop here.
-			return nil
-		}
-
-		if !unifies(types.S, exist) {
-			return newRefErrInvalid(ref[0].Location, rc.varRewriter(ref), idx, exist, types.S, getOneOfForNode(node))
-		}
-
-	// Catch other ref operand types here. Non-leaf nodes must be referred to
-	// with string values.
-	default:
-		return newRefErrInvalid(ref[0].Location, rc.varRewriter(ref), idx, nil, types.S, getOneOfForNode(node))
 	}
 
-	// Run checking on remaining portion of the ref. Note, since the ref
-	// potentially refers to data for which no type information exists,
-	// checking should never fail.
-	node.Children().Iter(func(_, child util.T) bool {
-		_ = rc.checkRef(curr, child.(*typeTreeNode), ref, idx+1) // ignore error
-		return false
-	})
+	child := node.Child(head.Value)
+	if child == nil {
+		// NOTE(sr): idx is reset on purpose: we start over
+		switch {
+		case curr.next != nil:
+			next := curr.next
+			return rc.checkRef(next, next.tree, ref, 0)
 
-	return nil
+		case RootDocumentNames.Contains(ref[0]):
+			if idx != 0 {
+				node.Children().Iter(func(_, child util.T) bool {
+					_ = rc.checkRef(curr, child.(*typeTreeNode), ref, idx+1) // ignore error
+					return false
+				})
+				return nil
+			}
+			return rc.checkRefLeaf(types.A, ref, 1)
+
+		default:
+			return rc.checkRefLeaf(types.A, ref, 0)
+		}
+	}
+
+	if child.Leaf() {
+		return rc.checkRefLeaf(child.Value(), ref, idx+1)
+	}
+
+	return rc.checkRef(curr, child, ref, idx+1)
 }
 
 func (rc *refChecker) checkRefLeaf(tpe types.Type, ref Ref, idx int) *Error {
@@ -805,7 +815,17 @@ func unifies(a, b types.Type) bool {
 		}
 		return unifies(types.Values(a), types.Values(b))
 	case *types.Function:
-		// TODO(tsandall): revisit once functions become first-class values.
+		// NOTE(sr): variadic functions can only be internal ones, and we've forbidden
+		// their replacement via `with`; so we disregard variadic here
+		if types.Arity(a) == types.Arity(b) {
+			b := b.(*types.Function)
+			for i := range a.FuncArgs().Args {
+				if !unifies(a.FuncArgs().Arg(i), b.FuncArgs().Arg(i)) {
+					return false
+				}
+			}
+			return true
+		}
 		return false
 	default:
 		panic("unreachable")
@@ -1170,7 +1190,7 @@ func getObjectType(ref Ref, o types.Type, rule *Rule, d *types.DynamicProperty) 
 	return getObjectTypeRec(keys, o, d), nil
 }
 
-func getRuleAnnotation(as *annotationSet, rule *Rule) (result []*SchemaAnnotation) {
+func getRuleAnnotation(as *AnnotationSet, rule *Rule) (result []*SchemaAnnotation) {
 
 	for _, x := range as.GetSubpackagesScope(rule.Module.Package.Path) {
 		result = append(result, x.Schemas...)
@@ -1196,6 +1216,9 @@ func processAnnotation(ss *SchemaSet, annot *SchemaAnnotation, rule *Rule, allow
 	var schema interface{}
 
 	if annot.Schema != nil {
+		if ss == nil {
+			return nil, nil, nil
+		}
 		schema = ss.Get(annot.Schema)
 		if schema == nil {
 			return nil, nil, NewError(TypeErr, rule.Location, "undefined schema: %v", annot.Schema)
@@ -1214,159 +1237,4 @@ func processAnnotation(ss *SchemaSet, annot *SchemaAnnotation, rule *Rule, allow
 
 func errAnnotationRedeclared(a *Annotations, other *Location) *Error {
 	return NewError(TypeErr, a.Location, "%v annotation redeclared: %v", a.Scope, other)
-}
-
-type annotationSet struct {
-	byRule    map[*Rule][]*Annotations
-	byPackage map[*Package]*Annotations
-	byPath    *annotationTreeNode
-}
-
-func buildAnnotationSet(rules []util.T) (*annotationSet, Errors) {
-	as := newAnnotationSet()
-	processed := map[*Module]struct{}{}
-	var errs Errors
-	for _, x := range rules {
-		module := x.(*Rule).Module
-		if _, ok := processed[module]; ok {
-			continue
-		}
-		processed[module] = struct{}{}
-		for _, a := range module.Annotations {
-			if err := as.Add(a); err != nil {
-				errs = append(errs, err)
-			}
-		}
-	}
-	if len(errs) > 0 {
-		return nil, errs
-	}
-	return as, nil
-}
-
-func newAnnotationSet() *annotationSet {
-	return &annotationSet{
-		byRule:    map[*Rule][]*Annotations{},
-		byPackage: map[*Package]*Annotations{},
-		byPath:    newAnnotationTree(),
-	}
-}
-
-func (as *annotationSet) Add(a *Annotations) *Error {
-	switch a.Scope {
-	case annotationScopeRule:
-		rule := a.node.(*Rule)
-		as.byRule[rule] = append(as.byRule[rule], a)
-	case annotationScopePackage:
-		pkg := a.node.(*Package)
-		if exist, ok := as.byPackage[pkg]; ok {
-			return errAnnotationRedeclared(a, exist.Location)
-		}
-		as.byPackage[pkg] = a
-	case annotationScopeDocument:
-		rule := a.node.(*Rule)
-		path := rule.Path()
-		x := as.byPath.Get(path)
-		if x != nil {
-			return errAnnotationRedeclared(a, x.Value.Location)
-		}
-		as.byPath.Insert(path, a)
-	case annotationScopeSubpackages:
-		pkg := a.node.(*Package)
-		x := as.byPath.Get(pkg.Path)
-		if x != nil {
-			return errAnnotationRedeclared(a, x.Value.Location)
-		}
-		as.byPath.Insert(pkg.Path, a)
-	}
-	return nil
-}
-
-func (as *annotationSet) GetRuleScope(r *Rule) []*Annotations {
-	if as == nil {
-		return nil
-	}
-	return as.byRule[r]
-}
-
-func (as *annotationSet) GetSubpackagesScope(path Ref) []*Annotations {
-	if as == nil {
-		return nil
-	}
-	return as.byPath.Ancestors(path)
-}
-
-func (as *annotationSet) GetDocumentScope(path Ref) *Annotations {
-	if as == nil {
-		return nil
-	}
-	if node := as.byPath.Get(path); node != nil {
-		return node.Value
-	}
-	return nil
-}
-
-func (as *annotationSet) GetPackageScope(pkg *Package) *Annotations {
-	if as == nil {
-		return nil
-	}
-	return as.byPackage[pkg]
-}
-
-type annotationTreeNode struct {
-	Value    *Annotations
-	Children map[Value]*annotationTreeNode // we assume key elements are hashable (vars and strings only!)
-}
-
-func newAnnotationTree() *annotationTreeNode {
-	return &annotationTreeNode{
-		Value:    nil,
-		Children: map[Value]*annotationTreeNode{},
-	}
-}
-
-func (t *annotationTreeNode) Insert(path Ref, value *Annotations) {
-	node := t
-	for _, k := range path {
-		child, ok := node.Children[k.Value]
-		if !ok {
-			child = newAnnotationTree()
-			node.Children[k.Value] = child
-		}
-		node = child
-	}
-	node.Value = value
-}
-
-func (t *annotationTreeNode) Get(path Ref) *annotationTreeNode {
-	node := t
-	for _, k := range path {
-		if node == nil {
-			return nil
-		}
-		child, ok := node.Children[k.Value]
-		if !ok {
-			return nil
-		}
-		node = child
-	}
-	return node
-}
-
-func (t *annotationTreeNode) Ancestors(path Ref) (result []*Annotations) {
-	node := t
-	for _, k := range path {
-		if node == nil {
-			return result
-		}
-		child, ok := node.Children[k.Value]
-		if !ok {
-			return result
-		}
-		if child.Value != nil {
-			result = append(result, child.Value)
-		}
-		node = child
-	}
-	return result
 }

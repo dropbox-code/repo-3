@@ -1,5 +1,23 @@
 $panel-header-logo-width: 85%
 
+.dashboard-wrapper
+  .banner-version-warning
+    display: none
+  .dashboard-main
+    .article
+      +desktop
+        // this is the height of the navbar only
+        max-height: calc(100vh - 3.5rem)
+        overflow: scroll
+.dashboard-wrapper.showing-banner-version-warning
+  .banner-version-warning
+    display: block
+  .dashboard-main
+    .article
+      +desktop
+        // this is the height of the navbar and warning banner
+        max-height: calc(100vh - 10.5rem)
+
 =flex
   display: flex
 
@@ -15,7 +33,6 @@ $panel-header-logo-width: 85%
   +row
   position: relative
   overflow: hidden
-  height: 100vh
 
   .is-scrollable
     overflow-y: auto
@@ -126,3 +143,54 @@ $panel-header-logo-width: 85%
 .dropdown-menu .dropdown-content
   max-height: 55vh
   overflow-y: auto
+
+.highlight
+  margin-bottom: 1.5rem // matches what live-blocks does
+
+.dashboard-wrapper
+  display: flex
+  flex-flow: column
+  height: 100%
+  max-height: 100vh
+
+.dashboard
+  flex: 1 1 auto
+
+  .navbar
+    @media screen and (min-width: 1024px)
+      position: sticky
+      top: 0
+
+.dashboard-panel-content
+  margin: 0 0 0 2rem
+  padding: 0 2rem 0 0
+
+.banner-version-warning
+  // override bulma defaults for messages
+  margin-bottom: 0 !important
+  border-radius: 0
+  font-size: 1.2rem
+  font-weight: bold
+  border-top: 1rem solid transparent
+  border-bottom: 1rem solid transparent
+  .message-body
+    border: none
+    border-radius: 0
+    button.delete
+      float: right
+      margin-top: 0.25rem
+
+  // this is used to make the banner appear in the same position as the page
+  // scrolls
+  position: sticky
+  width: 100%
+  z-index: 100
+
+  // different types of message should have different colors. The colors are
+  // duplicated from the bulma since we're not using variables
+  &.is-danger
+    border-image: 50 repeating-linear-gradient(75deg, #cc0f35 0, #cc0f35 1rem, transparent 0, transparent 2rem)
+  &.is-warning
+    border-image: 50 repeating-linear-gradient(75deg, #946c00 0, #946c00 1rem, transparent 0, transparent 2rem)
+  &.is-info
+    border-image: 50 repeating-linear-gradient(75deg, #296fa8 0, #296fa8 1rem, transparent 0, transparent 2rem)

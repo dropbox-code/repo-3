@@ -11,16 +11,33 @@ import (
 	"strings"
 
 	"github.com/sirupsen/logrus"
+
+	"github.com/open-policy-agent/opa/logging"
 )
 
-func GetFormatter(format string) logrus.Formatter {
+func GetLevel(level string) (logging.Level, error) {
+	switch strings.ToLower(level) {
+	case "debug":
+		return logging.Debug, nil
+	case "", "info":
+		return logging.Info, nil
+	case "warn":
+		return logging.Warn, nil
+	case "error":
+		return logging.Error, nil
+	default:
+		return logging.Debug, fmt.Errorf("invalid log level: %v", level)
+	}
+}
+
+func GetFormatter(format, timestampFormat string) logrus.Formatter {
 	switch format {
 	case "text":
 		return &prettyFormatter{}
 	case "json-pretty":
-		return &logrus.JSONFormatter{PrettyPrint: true}
+		return &logrus.JSONFormatter{PrettyPrint: true, TimestampFormat: timestampFormat}
 	default:
-		return &logrus.JSONFormatter{}
+		return &logrus.JSONFormatter{TimestampFormat: timestampFormat}
 	}
 }
 

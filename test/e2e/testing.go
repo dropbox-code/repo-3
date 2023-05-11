@@ -7,10 +7,10 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"os"
@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/open-policy-agent/opa/internal/uuid"
 	"github.com/open-policy-agent/opa/logging"
 	"github.com/open-policy-agent/opa/logging/test"
 	"github.com/open-policy-agent/opa/runtime"
@@ -50,6 +51,13 @@ func NewAPIServerTestParams() runtime.Params {
 
 	params.GracefulShutdownPeriod = 10 // seconds
 
+	params.DecisionIDFactory = func() string {
+		id, err := uuid.New(rand.Reader)
+		if err != nil {
+			return ""
+		}
+		return id
+	}
 	return params
 }
 
@@ -205,7 +213,7 @@ func (t *TestRuntime) runTests(m *testing.M, suppressLogs bool) int {
 	go func() {
 		// Suppress the stdlogger in the server
 		if suppressLogs {
-			logging.Get().SetOutput(ioutil.Discard)
+			logging.Get().SetOutput(io.Discard)
 		}
 		err := t.Runtime.Serve(t.Ctx)
 		done <- err
@@ -214,7 +222,7 @@ func (t *TestRuntime) runTests(m *testing.M, suppressLogs bool) int {
 	// Turns out this thread gets a different stdlogger
 	// so we need to set the output on it here too.
 	if suppressLogs {
-		logging.Get().SetOutput(ioutil.Discard)
+		logging.Get().SetOutput(io.Discard)
 	}
 
 	// wait for the server to be ready
@@ -295,6 +303,22 @@ func (t *TestRuntime) WaitForServer() error {
 	return fmt.Errorf("API Server not ready in time")
 }
 
+// DeletePolicy will delete the given policy in the runtime via the v1 policy API
+func (t *TestRuntime) DeletePolicy(name string) error {
+	req, err := http.NewRequest("DELETE", t.URL()+"/v1/policies/"+name, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := t.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to DELETE the test policy: %s", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected response: %d %s", resp.StatusCode, resp.Status)
+	}
+	return nil
+}
+
 // UploadPolicy will upload the given policy to the runtime via the v1 policy API
 func (t *TestRuntime) UploadPolicy(name string, policy io.Reader) error {
 	req, err := http.NewRequest("PUT", t.URL()+"/v1/policies/"+name, policy)
@@ -354,7 +378,7 @@ func (t *TestRuntime) GetDataWithInput(path string, input interface{}) ([]byte, 
 		return nil, err
 	}
 
-	body, err := ioutil.ReadAll(resp)
+	body, err := io.ReadAll(resp)
 	if err != nil {
 		return nil, fmt.Errorf("unexpected error reading response body: %s", err)
 	}
@@ -374,16 +398,29 @@ func (t *TestRuntime) GetData(url string) (io.ReadCloser, error) {
 	return t.request("GET", url, nil)
 }
 
-// CompileRequestWitInstrumentation will use the v1 compile API and POST with the given request and instrumentation enabled.
-func (t *TestRuntime) CompileRequestWitInstrumentation(req types.CompileRequestV1) (*types.CompileResponseV1, error) {
+// CompileRequestWithInstrumentation will use the v1 compile API and POST with the given request and instrumentation enabled.
+func (t *TestRuntime) CompileRequestWithInstrumentation(req types.CompileRequestV1) (*types.CompileResponseV1, error) {
+	return t.compileRequest(req, true)
+}
+
+// CompileRequest will use the v1 compile API and POST with the given request.
+func (t *TestRuntime) CompileRequest(req types.CompileRequestV1) (*types.CompileResponseV1, error) {
+	return t.compileRequest(req, false)
+}
+
+func (t *TestRuntime) compileRequest(req types.CompileRequestV1, instrument bool) (*types.CompileResponseV1, error) {
 	inputPayload := util.MustMarshalJSON(req)
 
-	resp, err := t.request("POST", t.URL()+"/v1/compile?instrument", bytes.NewReader(inputPayload))
+	url := t.URL() + "/v1/compile"
+	if instrument {
+		url += "?instrument"
+	}
+	resp, err := t.request("POST", url, bytes.NewReader(inputPayload))
 	if err != nil {
 		return nil, err
 	}
 
-	body, err := ioutil.ReadAll(resp)
+	body, err := io.ReadAll(resp)
 	if err != nil {
 		return nil, fmt.Errorf("unexpected error reading response body: %s", err)
 	}

@@ -15,6 +15,25 @@ should be tagged with the semantic version identifying the release.
 Publishing involves creating a new *Release* on GitHub with the relevant
 CHANGELOG.md snippet and uploading the binaries from the build phase.
 
+> Note: This release process is subject to change without notice.
+
+## Release Cadence
+
+There are two version tracks for the OPA project:
+
+1. Release Candidate (vX.Y.Z-rc.A)
+2. Stable (vX.Y.Z)
+
+A new version of OPA is scheduled to release on the last Friday of every month. At the beginning of that week,
+we will create a release candidate branch (`release-<major>.<minor>-rc.0`) from the main branch and create a release
+candidate tag (`v<major>.<minor>.0-rc.0`) based on the release candidate branch for pre-release. Once the pre-release
+is published, users are encouraged to try out the features, bug fixes in the release candidate. If regressions or bugs
+are detected, they need to get fixed before cutting the stable release. We do not recommend using OPA release
+candidates in a production environment. The stable release that comes out after the release candidate may be identical
+to the release candidate if no other features or bug fixes are introduced to the main branch in between.
+
+See the next section for details on cutting an individual release.
+
 ## Versioning
 
 The steps below assume an OPA development environment has configured for the
@@ -27,6 +46,19 @@ standard GitHub fork workflow. See [OPA Dev Instructions](DEVELOPMENT.md)
 	git remote add upstream git@github.com:open-policy-agent/opa.git
 	git fetch --tags upstream
 	```
+
+	Note: This stage can fail if you have not registered an [SSH key](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/adding-a-new-ssh-key-to-your-github-account)
+	on your Github account.
+
+1. Create a release branch off of `main`, to ensure you don't mangle your
+   fork while creating the release:
+
+	```
+	git checkout -b release-v<version> origin/main
+	```
+
+1. Create a [personal access token](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token)
+   for GitHub with the 'read:org' scope. Export it to the `GITHUB_TOKEN` environment variable.
 
 1. Execute the release-patch target to generate boilerplate patch. Give the semantic version of the release:
 
@@ -50,7 +82,7 @@ standard GitHub fork workflow. See [OPA Dev Instructions](DEVELOPMENT.md)
 	```
 	git add .
 	git commit -s -m "Prepare v<version> release"
-	git push origin main
+	git push origin release-v<version>
 	```
 
 1. Create a Pull Request for the release preparation commit.
@@ -63,6 +95,12 @@ standard GitHub fork workflow. See [OPA Dev Instructions](DEVELOPMENT.md)
     ```
 
     > Note: Ensure that tag is pointing to the correct commit ID! It must be the merged release preparation commit.
+
+1. Create a new branch for the dev-patch work:
+
+    ```
+	git checkout -b dev-v<next_semvar> origin/main
+	```
 
 1. Execute the dev-patch target to generate boilerplate patch. Give the semantic version of the next release:
 
@@ -83,7 +121,7 @@ standard GitHub fork workflow. See [OPA Dev Instructions](DEVELOPMENT.md)
 
 	```
 	git commit -a -s -m "Prepare v<next_semvar> development"
-	git push origin main
+	git push origin dev-v<next_semvar>
 	```
 
 1. Create a Pull Request for the development preparation commit.
@@ -161,7 +199,7 @@ make release-patch VERSION=0.14.1 > ~/release.patch
 Apply the patch to the working copy and preview the changes:
 
 ```bash
-patch -p1 < ~/dev.patch
+patch -p1 < ~/release.patch
 git diff
 ```
 
@@ -182,6 +220,7 @@ Once the Pull Request has merged fetch the latest changes and tag the commit to
 prepare for publishing. Use the same instructions as defined above in normal
 release [publishing](#publishing) guide (being careful to tag the appropriate commit).
 
-Last step is to copy the CHANGELOG snippet and capabilities.json for the version to `main`. Create
-a new PR with the version information added below the `Unreleased` section. Remove
-any `Unreleased` notes if they were included in the bugfix release.
+Last step is to copy the CHANGELOG snippet and generated files
+(builtin_metadata.json and capabilities.json) for the version to `main`. Create
+a new PR with the version information added below the `Unreleased` section.
+Remove any `Unreleased` notes if they were included in the bugfix release.

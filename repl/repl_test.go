@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -22,7 +21,7 @@ import (
 	"github.com/open-policy-agent/opa/ast"
 	"github.com/open-policy-agent/opa/internal/presentation"
 	"github.com/open-policy-agent/opa/storage"
-	"github.com/open-policy-agent/opa/storage/inmem"
+	inmem "github.com/open-policy-agent/opa/storage/inmem/test"
 	"github.com/open-policy-agent/opa/util"
 )
 
@@ -287,7 +286,7 @@ func TestDumpPath(t *testing.T) {
 	var buffer bytes.Buffer
 	repl := newRepl(store, &buffer)
 
-	dir, err := ioutil.TempDir("", "dump-path-test")
+	dir, err := os.MkdirTemp("", "dump-path-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +306,54 @@ func TestDumpPath(t *testing.T) {
 		t.Errorf("Expected no output but got: %v", buffer.String())
 	}
 
-	bs, err := ioutil.ReadFile(file)
+	bs, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("Expected file read to succeed but got: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := util.UnmarshalJSON(bs, &result); err != nil {
+		t.Fatalf("Expected json unmarshal to succeed but got: %v", err)
+	}
+
+	if !reflect.DeepEqual(data, result) {
+		t.Fatalf("Expected dumped json to equal %v but got: %v", data, result)
+	}
+}
+
+func TestDumpPathCaseSensitive(t *testing.T) {
+	ctx := context.Background()
+	input := `{"a": [1,2,3,4]}`
+	var data map[string]interface{}
+	err := util.UnmarshalJSON([]byte(input), &data)
+	if err != nil {
+		panic(err)
+	}
+	store := inmem.NewFromObject(data)
+	var buffer bytes.Buffer
+	repl := newRepl(store, &buffer)
+
+	dir, err := os.MkdirTemp("", "DumpPathCaseSensitiveTest")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() {
+		err := os.RemoveAll(dir)
+		if err != nil {
+			t.Errorf("error cleaning up with RemoveAll(): %v", err)
+		}
+	})
+	file := filepath.Join(dir, "tmpfile")
+	if err := repl.OneShot(ctx, fmt.Sprintf("dump %s", file)); err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	if buffer.String() != "" {
+		t.Errorf("Expected no output but got: %v", buffer.String())
+	}
+
+	bs, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatalf("Expected file read to succeed but got: %v", err)
 	}
@@ -2673,6 +2719,46 @@ func TestUnsetPackage(t *testing.T) {
 	}
 	if buffer.String() != "no rules defined\n" {
 		t.Fatalf("Expected unset-package to return to default but got: %v", buffer.String())
+	}
+}
+
+func TestCapabilities(t *testing.T) {
+	capabilities := ast.CapabilitiesForThisVersion()
+	allowedBuiltins := []*ast.Builtin{}
+	for _, builtin := range capabilities.Builtins {
+		if builtin.Name != "http.send" {
+			allowedBuiltins = append(allowedBuiltins, builtin)
+		}
+	}
+	capabilities.Builtins = allowedBuiltins
+	ctx := context.Background()
+	store := inmem.New()
+	var buffer bytes.Buffer
+	repl := newRepl(store, &buffer).WithCapabilities(capabilities)
+	if err := repl.OneShot(ctx, `http.send({"url": "http://example.com", "method": "GET"})`); err != nil {
+		if !strings.Contains(fmt.Sprintf("%v", err), "undefined function http.send") {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+	} else {
+		t.Fatalf("Expected error on http.send")
+	}
+}
+
+func TestTraceArgument(t *testing.T) {
+	ctx := context.Background()
+	store := inmem.New()
+	var buffer bytes.Buffer
+	repl := newRepl(store, &buffer)
+	if err := repl.OneShot(ctx, "trace debug"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repl.OneShot(ctx, "show debug"); err != nil {
+		t.Fatal(err)
+	}
+	output := buffer.String()
+	expected := `"explain": "debug"`
+	if !strings.Contains(output, expected) {
+		t.Fatalf("Expected output to contain %s but got %s", expected, output)
 	}
 }
 

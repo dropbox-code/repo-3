@@ -8,6 +8,7 @@ package ast
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -17,9 +18,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/OneOfOne/xxhash"
-	"github.com/pkg/errors"
 
 	"github.com/open-policy-agent/opa/ast/location"
 	"github.com/open-policy-agent/opa/util"
@@ -133,12 +134,12 @@ func As(v Value, x interface{}) error {
 
 // Resolver defines the interface for resolving references to native Go values.
 type Resolver interface {
-	Resolve(ref Ref) (interface{}, error)
+	Resolve(Ref) (interface{}, error)
 }
 
 // ValueResolver defines the interface for resolving references to AST values.
 type ValueResolver interface {
-	Resolve(ref Ref) (Value, error)
+	Resolve(Ref) (Value, error)
 }
 
 // UnknownValueErr indicates a ValueResolver was unable to resolve a reference
@@ -215,6 +216,11 @@ func valueToInterface(v Value, resolver Resolver, opt JSONOpt) (interface{}, err
 			return nil, err
 		}
 		return buf, nil
+	case *lazyObj:
+		if opt.CopyMaps {
+			return valueToInterface(v.force(), resolver, opt)
+		}
+		return v.native, nil
 	case Set:
 		buf := []interface{}{}
 		iter := func(x *Term) error {
@@ -251,6 +257,7 @@ func JSON(v Value) (interface{}, error) {
 // JSONOpt defines parameters for AST to JSON conversion.
 type JSONOpt struct {
 	SortSets bool // sort sets before serializing (this makes conversion more expensive)
+	CopyMaps bool // enforces copying of map[string]interface{} read from the store
 }
 
 // JSONWithOpt returns the JSON representation of v. The value must not contain any
@@ -284,8 +291,10 @@ func MustInterfaceToValue(x interface{}) Value {
 
 // Term is an argument to a function.
 type Term struct {
-	Value    Value     `json:"value"` // the value of the Term as represented in Go
-	Location *Location `json:"-"`     // the location of the Term in the source
+	Value    Value     `json:"value"`              // the value of the Term as represented in Go
+	Location *Location `json:"location,omitempty"` // the location of the Term in the source
+
+	jsonOptions JSONOptions
 }
 
 // NewTerm returns a new Term object.
@@ -383,9 +392,13 @@ func (term *Term) Equal(other *Term) bool {
 // Get returns a value referred to by name from the term.
 func (term *Term) Get(name *Term) *Term {
 	switch v := term.Value.(type) {
+	case *object:
+		return v.Get(name)
 	case *Array:
 		return v.Get(name)
-	case *object:
+	case interface {
+		Get(*Term) *Term
+	}:
 		return v.Get(name)
 	case Set:
 		if v.Contains(name) {
@@ -406,6 +419,10 @@ func (term *Term) IsGround() bool {
 	return term.Value.IsGround()
 }
 
+func (term *Term) setJSONOptions(opts JSONOptions) {
+	term.jsonOptions = opts
+}
+
 // MarshalJSON returns the JSON encoding of the term.
 //
 // Specialized marshalling logic is required to include a type hint for Value.
@@ -413,6 +430,11 @@ func (term *Term) MarshalJSON() ([]byte, error) {
 	d := map[string]interface{}{
 		"type":  TypeName(term.Value),
 		"value": term.Value,
+	}
+	if term.jsonOptions.MarshalOptions.IncludeLocation.Term {
+		if term.Location != nil {
+			d["location"] = term.Location
+		}
 	}
 	return json.Marshal(d)
 }
@@ -422,7 +444,7 @@ func (term *Term) String() string {
 }
 
 // UnmarshalJSON parses the byte array and stores the result in term.
-// Specialized unmarshalling is required to handle Value.
+// Specialized unmarshalling is required to handle Value and Location.
 func (term *Term) UnmarshalJSON(bs []byte) error {
 	v := map[string]interface{}{}
 	if err := util.UnmarshalJSON(bs, &v); err != nil {
@@ -433,6 +455,14 @@ func (term *Term) UnmarshalJSON(bs []byte) error {
 		return err
 	}
 	term.Value = val
+
+	if loc, ok := v["location"].(map[string]interface{}); ok {
+		term.Location = &Location{}
+		err := unmarshalLocation(term.Location, loc)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -485,6 +515,20 @@ func ContainsComprehensions(v interface{}) bool {
 	WalkClosures(v, func(x interface{}) bool {
 		switch x.(type) {
 		case *ArrayComprehension, *ObjectComprehension, *SetComprehension:
+			found = true
+			return found
+		}
+		return found
+	})
+	return found
+}
+
+// ContainsClosures returns true if the Value v contains closures.
+func ContainsClosures(v interface{}) bool {
+	found := false
+	WalkClosures(v, func(x interface{}) bool {
+		switch x.(type) {
+		case *ArrayComprehension, *ObjectComprehension, *SetComprehension, *Every:
 			found = true
 			return found
 		}
@@ -878,19 +922,16 @@ func (ref Ref) Append(term *Term) Ref {
 // existing elements are shifted to the right. If pos > len(ref)+1 this
 // function panics.
 func (ref Ref) Insert(x *Term, pos int) Ref {
-	if pos == len(ref) {
+	switch {
+	case pos == len(ref):
 		return ref.Append(x)
-	} else if pos > len(ref)+1 {
+	case pos > len(ref)+1:
 		panic("illegal index")
 	}
 	cpy := make(Ref, len(ref)+1)
-	for i := 0; i < pos; i++ {
-		cpy[i] = ref[i]
-	}
+	copy(cpy, ref[:pos])
 	cpy[pos] = x
-	for i := pos; i < len(ref); i++ {
-		cpy[i+1] = ref[i]
-	}
+	copy(cpy[pos+1:], ref[pos:])
 	return cpy
 }
 
@@ -904,9 +945,8 @@ func (ref Ref) Extend(other Ref) Ref {
 	head.Value = String(head.Value.(Var))
 	offset := len(ref)
 	dst[offset] = head
-	for i := range other[1:] {
-		dst[offset+i+1] = other[i+1]
-	}
+
+	copy(dst[offset+1:], other[1:])
 	return dst
 }
 
@@ -917,10 +957,7 @@ func (ref Ref) Concat(terms []*Term) Ref {
 	}
 	cpy := make(Ref, len(ref)+len(terms))
 	copy(cpy, ref)
-
-	for i := range terms {
-		cpy[len(ref)+i] = terms[i]
-	}
+	copy(cpy[len(ref):], terms)
 	return cpy
 }
 
@@ -1064,11 +1101,23 @@ func (ref Ref) String() string {
 }
 
 // OutputVars returns a VarSet containing variables that would be bound by evaluating
-//  this expression in isolation.
+// this expression in isolation.
 func (ref Ref) OutputVars() VarSet {
 	vis := NewVarVisitor().WithParams(VarVisitorParams{SkipRefHead: true})
 	vis.Walk(ref)
 	return vis.Vars()
+}
+
+func (ref Ref) toArray() *Array {
+	a := NewArray()
+	for _, term := range ref {
+		if _, ok := term.Value.(String); ok {
+			a = a.Append(term)
+		} else {
+			a = a.Append(StringTerm(term.Value.String()))
+		}
+	}
+	return a
 }
 
 // QueryIterator defines the interface for querying AST documents with references.
@@ -1076,26 +1125,40 @@ type QueryIterator func(map[Var]Value, Value) error
 
 // ArrayTerm creates a new Term with an Array value.
 func ArrayTerm(a ...*Term) *Term {
-	return &Term{Value: &Array{a, 0}}
+	return NewTerm(NewArray(a...))
 }
 
 // NewArray creates an Array with the terms provided. The array will
 // use the provided term slice.
 func NewArray(a ...*Term) *Array {
-	return &Array{a, 0}
+	hs := make([]int, len(a))
+	for i, e := range a {
+		hs[i] = e.Value.Hash()
+	}
+	arr := &Array{elems: a, hashs: hs, ground: termSliceIsGround(a)}
+	arr.rehash()
+	return arr
 }
 
 // Array represents an array as defined by the language. Arrays are similar to the
 // same types as defined by JSON with the exception that they can contain Vars
 // and References.
 type Array struct {
-	elems []*Term
-	hash  int
+	elems  []*Term
+	hashs  []int // element hashes
+	hash   int
+	ground bool
 }
 
 // Copy returns a deep copy of arr.
 func (arr *Array) Copy() *Array {
-	return &Array{termSliceCopy(arr.elems), arr.hash}
+	cpy := make([]int, len(arr.elems))
+	copy(cpy, arr.hashs)
+	return &Array{
+		elems:  termSliceCopy(arr.elems),
+		hashs:  cpy,
+		hash:   arr.hash,
+		ground: arr.IsGround()}
 }
 
 // Equal returns true if arr is equal to other.
@@ -1155,28 +1218,24 @@ func (arr *Array) Sorted() *Array {
 	}
 	sort.Sort(termSlice(cpy))
 	a := NewArray(cpy...)
-	a.hash = arr.hash
+	a.hashs = arr.hashs
 	return a
 }
 
 // Hash returns the hash code for the Value.
 func (arr *Array) Hash() int {
-	if arr.hash == 0 {
-		arr.hash = termSliceHash(arr.elems)
-	}
-
 	return arr.hash
 }
 
 // IsGround returns true if all of the Array elements are ground.
 func (arr *Array) IsGround() bool {
-	return termSliceIsGround(arr.elems)
+	return arr.ground
 }
 
 // MarshalJSON returns JSON encoded bytes representing arr.
 func (arr *Array) MarshalJSON() ([]byte, error) {
 	if len(arr.elems) == 0 {
-		return json.Marshal([]interface{}{})
+		return []byte(`[]`), nil
 	}
 	return json.Marshal(arr.elems)
 }
@@ -1204,10 +1263,19 @@ func (arr *Array) Elem(i int) *Term {
 	return arr.elems[i]
 }
 
+// rehash updates the cached hash of arr.
+func (arr *Array) rehash() {
+	arr.hash = 0
+	for _, h := range arr.hashs {
+		arr.hash += h
+	}
+}
+
 // set sets the element i of arr.
 func (arr *Array) set(i int, v *Term) {
+	arr.ground = arr.ground && v.IsGround()
 	arr.elems[i] = v
-	arr.hash = 0
+	arr.hashs[i] = v.Value.Hash()
 }
 
 // Slice returns a slice of arr starting from i index to j. -1
@@ -1215,11 +1283,22 @@ func (arr *Array) set(i int, v *Term) {
 // copy and any modifications to either of arrays may be reflected to
 // the other.
 func (arr *Array) Slice(i, j int) *Array {
+	var elems []*Term
+	var hashs []int
 	if j == -1 {
-		return &Array{elems: arr.elems[i:]}
+		elems = arr.elems[i:]
+		hashs = arr.hashs[i:]
+	} else {
+		elems = arr.elems[i:j]
+		hashs = arr.hashs[i:j]
 	}
+	// If arr is ground, the slice is, too.
+	// If it's not, the slice could still be.
+	gr := arr.ground || termSliceIsGround(elems)
 
-	return &Array{elems: arr.elems[i:j]}
+	s := &Array{elems: elems, hashs: hashs, ground: gr}
+	s.rehash()
+	return s
 }
 
 // Iter calls f on each element in arr. If f returns an error,
@@ -1256,7 +1335,9 @@ func (arr *Array) Foreach(f func(*Term)) {
 func (arr *Array) Append(v *Term) *Array {
 	cpy := *arr
 	cpy.elems = append(arr.elems, v)
-	cpy.hash = 0
+	cpy.hashs = append(arr.hashs, v.Value.Hash())
+	cpy.hash = arr.hash + v.Value.Hash()
+	cpy.ground = arr.ground && v.IsGround()
 	return &cpy
 }
 
@@ -1294,10 +1375,11 @@ func newset(n int) *set {
 		keys = make([]*Term, 0, n)
 	}
 	return &set{
-		elems:  make(map[int]*Term, n),
-		keys:   keys,
-		hash:   0,
-		ground: true,
+		elems:     make(map[int]*Term, n),
+		keys:      keys,
+		hash:      0,
+		ground:    true,
+		sortGuard: new(sync.Once),
 	}
 }
 
@@ -1310,10 +1392,11 @@ func SetTerm(t ...*Term) *Term {
 }
 
 type set struct {
-	elems  map[int]*Term
-	keys   []*Term
-	hash   int
-	ground bool
+	elems     map[int]*Term
+	keys      []*Term
+	hash      int
+	ground    bool
+	sortGuard *sync.Once // Prevents race condition around sorting.
 }
 
 // Copy returns a deep copy of s.
@@ -1334,11 +1417,6 @@ func (s *set) IsGround() bool {
 
 // Hash returns a hash code for s.
 func (s *set) Hash() int {
-	if s.hash == 0 {
-		s.Foreach(func(x *Term) {
-			s.hash += x.Hash()
-		})
-	}
 	return s.hash
 }
 
@@ -1348,7 +1426,7 @@ func (s *set) String() string {
 	}
 	var b strings.Builder
 	b.WriteRune('{')
-	for i := range s.keys {
+	for i := range s.sortedKeys() {
 		if i > 0 {
 			b.WriteString(", ")
 		}
@@ -1356,6 +1434,13 @@ func (s *set) String() string {
 	}
 	b.WriteRune('}')
 	return b.String()
+}
+
+func (s *set) sortedKeys() []*Term {
+	s.sortGuard.Do(func() {
+		sort.Sort(termSlice(s.keys))
+	})
+	return s.keys
 }
 
 // Compare compares s to other, return <0, 0, or >0 if it is less than, equal to,
@@ -1369,7 +1454,7 @@ func (s *set) Compare(other Value) int {
 		return 1
 	}
 	t := other.(*set)
-	return termSliceCompare(s.keys, t.keys)
+	return termSliceCompare(s.sortedKeys(), t.sortedKeys())
 }
 
 // Find returns the set or dereferences the element itself.
@@ -1435,7 +1520,7 @@ func (s *set) Add(t *Term) {
 // Iter calls f on each element in s. If f returns an error, iteration stops
 // and the return value is the error.
 func (s *set) Iter(f func(*Term) error) error {
-	for i := range s.keys {
+	for i := range s.sortedKeys() {
 		if err := f(s.keys[i]); err != nil {
 			return err
 		}
@@ -1509,28 +1594,28 @@ func (s *set) Len() int {
 // MarshalJSON returns JSON encoded bytes representing s.
 func (s *set) MarshalJSON() ([]byte, error) {
 	if s.keys == nil {
-		return json.Marshal([]interface{}{})
+		return []byte(`[]`), nil
 	}
-	return json.Marshal(s.keys)
+	return json.Marshal(s.sortedKeys())
 }
 
 // Sorted returns an Array that contains the sorted elements of s.
 func (s *set) Sorted() *Array {
 	cpy := make([]*Term, len(s.keys))
-	for i := range s.keys {
-		cpy[i] = s.keys[i]
-	}
-	sort.Sort(termSlice(cpy))
+	copy(cpy, s.sortedKeys())
 	return NewArray(cpy...)
 }
 
 // Slice returns a slice of terms contained in the set.
 func (s *set) Slice() []*Term {
-	return s.keys
+	return s.sortedKeys()
 }
 
+// NOTE(philipc): We assume a many-readers, single-writer model here.
+// This method should NOT be used concurrently, or else we risk data races.
 func (s *set) insert(x *Term) {
 	hash := x.Hash()
+	insertHash := hash
 	// This `equal` utility is duplicated and manually inlined a number of
 	// time in this file.  Inlining it avoids heap allocations, so it makes
 	// a big performance difference: some operations like lookup become twice
@@ -1608,27 +1693,23 @@ func (s *set) insert(x *Term) {
 		equal = func(y Value) bool { return Compare(x, y) == 0 }
 	}
 
-	for curr, ok := s.elems[hash]; ok; {
+	for curr, ok := s.elems[insertHash]; ok; {
 		if equal(curr.Value) {
 			return
 		}
 
-		hash++
-		curr, ok = s.elems[hash]
+		insertHash++
+		curr, ok = s.elems[insertHash]
 	}
 
-	s.elems[hash] = x
-	i := sort.Search(len(s.keys), func(i int) bool { return Compare(x, s.keys[i]) < 0 })
-	if i < len(s.keys) {
-		// insert at position `i`:
-		s.keys = append(s.keys, nil)   // add some space
-		copy(s.keys[i+1:], s.keys[i:]) // move things over
-		s.keys[i] = x                  // drop it in position
-	} else {
-		s.keys = append(s.keys, x)
-	}
+	s.elems[insertHash] = x
+	// O(1) insertion, but we'll have to re-sort the keys later.
+	s.keys = append(s.keys, x)
+	// Reset the sync.Once instance.
+	// See https://github.com/golang/go/issues/25955 for why we do it this way.
+	s.sortGuard = new(sync.Once)
 
-	s.hash = 0
+	s.hash += hash
 	s.ground = s.ground && x.IsGround()
 }
 
@@ -1740,7 +1821,7 @@ type Object interface {
 	MergeWith(other Object, conflictResolver func(v1, v2 *Term) (*Term, bool)) (Object, bool)
 	Filter(filter Object) (Object, error)
 	Keys() []*Term
-	Elem(i int) (*Term, *Term)
+	KeysIterator() ObjectKeysIterator
 	get(k *Term) *objectElem // To prevent external implementations
 }
 
@@ -1758,12 +1839,171 @@ func ObjectTerm(o ...[2]*Term) *Term {
 	return &Term{Value: NewObject(o...)}
 }
 
+func LazyObject(blob map[string]interface{}) Object {
+	return &lazyObj{native: blob}
+}
+
+type lazyObj struct {
+	strict Object
+	native map[string]interface{}
+}
+
+func (l *lazyObj) force() Object {
+	if l.strict == nil {
+		l.strict = MustInterfaceToValue(l.native).(Object)
+	}
+	return l.strict
+}
+
+func (l *lazyObj) Compare(other Value) int {
+	return l.force().Compare(other)
+}
+
+func (l *lazyObj) Copy() Object {
+	return l
+}
+
+func (l *lazyObj) Diff(other Object) Object {
+	return l.force().Diff(other)
+}
+
+func (l *lazyObj) Intersect(other Object) [][3]*Term {
+	return l.force().Intersect(other)
+}
+
+func (l *lazyObj) Iter(f func(*Term, *Term) error) error {
+	return l.force().Iter(f)
+}
+
+func (l *lazyObj) Until(f func(*Term, *Term) bool) bool {
+	// NOTE(sr): there could be benefits in not forcing here -- if we abort because
+	// `f` returns true, we could save us from converting the rest of the object.
+	return l.force().Until(f)
+}
+
+func (l *lazyObj) Foreach(f func(*Term, *Term)) {
+	l.force().Foreach(f)
+}
+
+func (l *lazyObj) Filter(filter Object) (Object, error) {
+	return l.force().Filter(filter)
+}
+
+func (l *lazyObj) Map(f func(*Term, *Term) (*Term, *Term, error)) (Object, error) {
+	return l.force().Map(f)
+}
+
+func (l *lazyObj) MarshalJSON() ([]byte, error) {
+	return l.force().(*object).MarshalJSON()
+}
+
+func (l *lazyObj) Merge(other Object) (Object, bool) {
+	return l.force().Merge(other)
+}
+
+func (l *lazyObj) MergeWith(other Object, conflictResolver func(v1, v2 *Term) (*Term, bool)) (Object, bool) {
+	return l.force().MergeWith(other, conflictResolver)
+}
+
+func (l *lazyObj) Len() int {
+	return len(l.native)
+}
+
+func (l *lazyObj) String() string {
+	return l.force().String()
+}
+
+// get is merely there to implement the Object interface -- `get` there serves the
+// purpose of prohibiting external implementations. It's never called for lazyObj.
+func (*lazyObj) get(*Term) *objectElem {
+	return nil
+}
+
+func (l *lazyObj) Get(k *Term) *Term {
+	if l.strict != nil {
+		return l.strict.Get(k)
+	}
+	if s, ok := k.Value.(String); ok {
+		if val, ok := l.native[string(s)]; ok {
+			switch val := val.(type) {
+			case map[string]interface{}:
+				return NewTerm(&lazyObj{native: val})
+			default:
+				return NewTerm(MustInterfaceToValue(val))
+			}
+		}
+	}
+	return nil
+}
+
+func (l *lazyObj) Insert(k, v *Term) {
+	l.force().Insert(k, v)
+}
+
+func (*lazyObj) IsGround() bool {
+	return true
+}
+
+func (l *lazyObj) Hash() int {
+	return l.force().Hash()
+}
+
+func (l *lazyObj) Keys() []*Term {
+	if l.strict != nil {
+		return l.strict.Keys()
+	}
+	ret := make([]*Term, 0, len(l.native))
+	for k := range l.native {
+		ret = append(ret, StringTerm(k))
+	}
+	sort.Sort(termSlice(ret))
+	return ret
+}
+
+func (l *lazyObj) KeysIterator() ObjectKeysIterator {
+	return &lazyObjKeysIterator{keys: l.Keys()}
+}
+
+type lazyObjKeysIterator struct {
+	current int
+	keys    []*Term
+}
+
+func (ki *lazyObjKeysIterator) Next() (*Term, bool) {
+	if ki.current == len(ki.keys) {
+		return nil, false
+	}
+	ki.current++
+	return ki.keys[ki.current-1], true
+}
+
+func (l *lazyObj) Find(path Ref) (Value, error) {
+	if l.strict != nil {
+		return l.strict.Find(path)
+	}
+	if len(path) == 0 {
+		return l, nil
+	}
+	if p0, ok := path[0].Value.(String); ok {
+		if v, ok := l.native[string(p0)]; ok {
+			switch v := v.(type) {
+			case map[string]interface{}:
+				return (&lazyObj{native: v}).Find(path[1:])
+			default:
+				return MustInterfaceToValue(v).Find(path[1:])
+			}
+		}
+	}
+	return nil, errFindNotFound
+}
+
 type object struct {
 	elems  map[int]*objectElem
 	keys   objectElemSlice
 	ground int // number of key and value grounds. Counting is
 	// required to support insert's key-value replace.
-	hash int
+	hash      int
+	sortGuard *sync.Once // Prevents race condition around sorting.
 }
 
 func newobject(n int) *object {
@@ -1772,10 +2012,11 @@ func newobject(n int) *object {
 		keys = make(objectElemSlice, 0, n)
 	}
 	return &object{
-		elems:  make(map[int]*objectElem, n),
-		keys:   keys,
-		ground: 0,
-		hash:   0,
+		elems:     make(map[int]*objectElem, n),
+		keys:      keys,
+		ground:    0,
+		hash:      0,
+		sortGuard: new(sync.Once),
 	}
 }
 
@@ -1797,9 +2038,19 @@ func Item(key, value *Term) [2]*Term {
 	return [2]*Term{key, value}
 }
 
+func (obj *object) sortedKeys() objectElemSlice {
+	obj.sortGuard.Do(func() {
+		sort.Sort(obj.keys)
+	})
+	return obj.keys
+}
+
 // Compare compares obj to other, return <0, 0, or >0 if it is less than, equal to,
 // or greater than other.
 func (obj *object) Compare(other Value) int {
+	if x, ok := other.(*lazyObj); ok {
+		other = x.force()
+	}
 	o1 := sortOrder(obj)
 	o2 := sortOrder(other)
 	if o1 < o2 {
@@ -1809,29 +2060,32 @@ func (obj *object) Compare(other Value) int {
 	}
 	a := obj
 	b := other.(*object)
-	minLen := len(a.keys)
-	if len(b.keys) < len(a.keys) {
-		minLen = len(b.keys)
+	// Ensure that keys are in canonical sorted order before use!
+	akeys := a.sortedKeys()
+	bkeys := b.sortedKeys()
+	minLen := len(akeys)
+	if len(b.keys) < len(akeys) {
+		minLen = len(bkeys)
 	}
 	for i := 0; i < minLen; i++ {
-		keysCmp := Compare(a.keys[i].key, b.keys[i].key)
+		keysCmp := Compare(akeys[i].key, bkeys[i].key)
 		if keysCmp < 0 {
 			return -1
 		}
 		if keysCmp > 0 {
 			return 1
 		}
-		valA := a.keys[i].value
-		valB := b.keys[i].value
+		valA := akeys[i].value
+		valB := bkeys[i].value
 		valCmp := Compare(valA, valB)
 		if valCmp != 0 {
 			return valCmp
 		}
 	}
-	if len(a.keys) < len(b.keys) {
+	if len(akeys) < len(bkeys) {
 		return -1
 	}
-	if len(b.keys) < len(a.keys) {
+	if len(bkeys) < len(akeys) {
 		return 1
 	}
 	return 0
@@ -1863,14 +2117,6 @@ func (obj *object) Get(k *Term) *Term {
 
 // Hash returns the hash code for the Value.
 func (obj *object) Hash() int {
-	if obj.hash == 0 {
-		for h, curr := range obj.elems {
-			for ; curr != nil; curr = curr.next {
-				obj.hash += h
-				obj.hash += curr.value.Hash()
-			}
-		}
-	}
 	return obj.hash
 }
 
@@ -1915,7 +2161,7 @@ func (obj *object) Intersect(other Object) [][3]*Term {
 // Iter calls the function f for each key-value pair in the object. If f
 // returns an error, iteration stops and the error is returned.
 func (obj *object) Iter(f func(*Term, *Term) error) error {
-	for _, node := range obj.keys {
+	for _, node := range obj.sortedKeys() {
 		if err := f(node.key, node.value); err != nil {
 			return err
 		}
@@ -1967,21 +2213,22 @@ func (obj *object) Map(f func(*Term, *Term) (*Term, *Term, error)) (Object, erro
 func (obj *object) Keys() []*Term {
 	keys := make([]*Term, len(obj.keys))
 
-	for i, elem := range obj.keys {
+	for i, elem := range obj.sortedKeys() {
 		keys[i] = elem.key
 	}
 
 	return keys
 }
 
-func (obj *object) Elem(i int) (*Term, *Term) {
-	return obj.keys[i].key, obj.keys[i].value
+// Returns an iterator over the obj's keys.
+func (obj *object) KeysIterator() ObjectKeysIterator {
+	return newobjectKeysIterator(obj)
 }
 
 // MarshalJSON returns JSON encoded bytes representing obj.
 func (obj *object) MarshalJSON() ([]byte, error) {
 	sl := make([][2]*Term, obj.Len())
-	for i, node := range obj.keys {
+	for i, node := range obj.sortedKeys() {
 		sl[i] = Item(node.key, node.value)
 	}
 	return json.Marshal(sl)
@@ -2061,7 +2308,7 @@ func (obj object) String() string {
 	var b strings.Builder
 	b.WriteRune('{')
 
-	for i, elem := range obj.keys {
+	for i, elem := range obj.sortedKeys() {
 		if i > 0 {
 			b.WriteString(", ")
 		}
@@ -2161,6 +2408,8 @@ func (obj *object) get(k *Term) *objectElem {
 	return nil
 }
 
+// NOTE(philipc): We assume a many-readers, single-writer model here.
+// This method should NOT be used concurrently, or else we risk data races.
 func (obj *object) insert(k, v *Term) {
 	hash := k.Hash()
 	head := obj.elems[hash]
@@ -2255,7 +2504,6 @@ func (obj *object) insert(k, v *Term) {
 			}
 
 			curr.value = v
-			obj.hash = 0
 			return
 		}
 	}
@@ -2265,16 +2513,12 @@ func (obj *object) insert(k, v *Term) {
 		next:  head,
 	}
 	obj.elems[hash] = elem
-	i := sort.Search(len(obj.keys), func(i int) bool { return Compare(elem.key, obj.keys[i].key) < 0 })
-	if i < len(obj.keys) {
-		// insert at position `i`:
-		obj.keys = append(obj.keys, nil)   // add some space
-		copy(obj.keys[i+1:], obj.keys[i:]) // move things over
-		obj.keys[i] = elem                 // drop it in position
-	} else {
-		obj.keys = append(obj.keys, elem)
-	}
-	obj.hash = 0
+	// O(1) insertion, but we'll have to re-sort the keys later.
+	obj.keys = append(obj.keys, elem)
+	// Reset the sync.Once instance.
+	// See https://github.com/golang/go/issues/25955 for why we do it this way.
+	obj.sortGuard = new(sync.Once)
+	obj.hash += hash + v.Hash()
 
 	if k.IsGround() {
 		obj.ground++
@@ -2347,6 +2591,36 @@ func filterObject(o Value, filter Value) (Value, error) {
 	default:
 		return nil, fmt.Errorf("invalid object value type %q", v)
 	}
+}
+
+// NOTE(philipc): The only way to get an ObjectKeyIterator should be
+// from an Object. This ensures that the iterator can have implementation-
+// specific details internally, with no contracts except to the very
+// limited interface.
+type ObjectKeysIterator interface {
+	Next() (*Term, bool)
+}
+
+type objectKeysIterator struct {
+	obj     *object
+	numKeys int
+	index   int
+}
+
+func newobjectKeysIterator(o *object) ObjectKeysIterator {
+	return &objectKeysIterator{
+		obj:     o,
+		numKeys: o.Len(),
+		index:   0,
+	}
+}
+
+func (oki *objectKeysIterator) Next() (*Term, bool) {
+	if oki.index == oki.numKeys || oki.numKeys == 0 {
+		return nil, false
+	}
+	oki.index++
+	return oki.obj.sortedKeys()[oki.index-1].key, true
 }
 
 // ArrayComprehension represents an array comprehension as defined in the language.
@@ -2642,6 +2916,14 @@ func unmarshalExpr(expr *Expr, v map[string]interface{}) error {
 			return fmt.Errorf("ast: unable to unmarshal negated field with type: %T (expected true or false)", v["negated"])
 		}
 	}
+	if generatedRaw, ok := v["generated"]; ok {
+		if b, ok := generatedRaw.(bool); ok {
+			expr.Generated = b
+		} else {
+			return fmt.Errorf("ast: unable to unmarshal generated field with type: %T (expected true or false)", v["generated"])
+		}
+	}
+
 	if err := unmarshalExprIndex(expr, v); err != nil {
 		return err
 	}
@@ -2674,6 +2956,46 @@ func unmarshalExpr(expr *Expr, v map[string]interface{}) error {
 			expr.With = ws
 		}
 	}
+	if loc, ok := v["location"].(map[string]interface{}); ok {
+		expr.Location = &Location{}
+		if err := unmarshalLocation(expr.Location, loc); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func unmarshalLocation(loc *Location, v map[string]interface{}) error {
+	if x, ok := v["file"]; ok {
+		if s, ok := x.(string); ok {
+			loc.File = s
+		} else {
+			return fmt.Errorf("ast: unable to unmarshal file field with type: %T (expected string)", v["file"])
+		}
+	}
+	if x, ok := v["row"]; ok {
+		if n, ok := x.(json.Number); ok {
+			i64, err := n.Int64()
+			if err != nil {
+				return err
+			}
+			loc.Row = int(i64)
+		} else {
+			return fmt.Errorf("ast: unable to unmarshal row field with type: %T (expected number)", v["row"])
+		}
+	}
+	if x, ok := v["col"]; ok {
+		if n, ok := x.(json.Number); ok {
+			i64, err := n.Int64()
+			if err != nil {
+				return err
+			}
+			loc.Col = int(i64)
+		} else {
+			return fmt.Errorf("ast: unable to unmarshal col field with type: %T (expected number)", v["col"])
+		}
+	}
+
 	return nil
 }
 
@@ -2691,11 +3013,22 @@ func unmarshalExprIndex(expr *Expr, v map[string]interface{}) error {
 }
 
 func unmarshalTerm(m map[string]interface{}) (*Term, error) {
+	var term Term
+
 	v, err := unmarshalValue(m)
 	if err != nil {
 		return nil, err
 	}
-	return &Term{Value: v}, nil
+	term.Value = v
+
+	if loc, ok := m["location"].(map[string]interface{}); ok {
+		term.Location = &Location{}
+		if err := unmarshalLocation(term.Location, loc); err != nil {
+			return nil, err
+		}
+	}
+
+	return &term, nil
 }
 
 func unmarshalTermSlice(s []interface{}) ([]*Term, error) {

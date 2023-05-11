@@ -5,8 +5,8 @@ weight: 1
 ---
 
 In Kubernetes, [Admission
-Controllers](https://kubernetes.io/docs/admin/admission-controllers/) enforce
-policies on objects during create, update, and delete operations. Admission
+Controllers](https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/)
+enforce policies on objects during create, update, and delete operations. Admission
 control is fundamental to policy enforcement in Kubernetes.
 
 For example, by deploying OPA as an admission controller you can:
@@ -34,7 +34,7 @@ Kubernetes clusters for security, cost, and availability reasons.
 project providing first-class integration between OPA and Kubernetes. For
 background information see this [blog
 post](https://kubernetes.io/blog/2019/08/06/opa-gatekeeper-policy-and-governance-for-kubernetes)
-on kubernetes.io and check out this [Katakoda tutorial](https://katacoda.com/austinheiman/scenarios/open-policy-agent-gatekeeper).
+on kubernetes.io.
 
 OPA Gatekeeper adds the following on top of plain OPA:
 
@@ -46,7 +46,7 @@ OPA Gatekeeper adds the following on top of plain OPA:
 If you want to kick the tires:
 
 * See the [Installation
-  Instructions](https://github.com/open-policy-agent/gatekeeper#installation-instructions)
+  Instructions](https://open-policy-agent.github.io/gatekeeper/website/docs/install/)
   in the README.
 * See the
   [demo/basic](https://github.com/open-policy-agent/gatekeeper/tree/master/demo/basic)
@@ -115,7 +115,7 @@ Here is an example of a Pod being created:
 ```live:container_image:input
 {
   "kind": "AdmissionReview",
-  "apiVersion": "admission.k8s.io/v1beta1",
+  "apiVersion": "admission.k8s.io/v1",
   "request": {
     "kind": {
       "group": "",
@@ -229,7 +229,7 @@ sent back to the API Server.
 ```json
 {
   "kind": "AdmissionReview",
-  "apiVersion": "admission.k8s.io/v1beta1",
+  "apiVersion": "admission.k8s.io/v1",
   "response": {
     "allowed": false,
     "status": {

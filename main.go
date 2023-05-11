@@ -5,7 +5,6 @@
 package main
 
 import (
-	"fmt"
 	"os"
 
 	"github.com/open-policy-agent/opa/cmd"
@@ -13,13 +12,10 @@ import (
 
 func main() {
 	if err := cmd.RootCommand.Execute(); err != nil {
-		fmt.Println(err)
 		os.Exit(1)
 	}
 }
 
-// Capabilities file generation:
+// Capabilities + built-in metadata file generation:
 //go:generate build/gen-run-go.sh internal/cmd/genopacapabilities/main.go capabilities.json
-
-// WASM base binary generation:
-//go:generate build/gen-run-go.sh internal/cmd/genopawasm/main.go -o internal/compiler/wasm/opa/opa.go internal/compiler/wasm/opa/opa.wasm  internal/compiler/wasm/opa/callgraph.csv
+//go:generate build/gen-run-go.sh internal/cmd/genbuiltinmetadata/main.go builtin_metadata.json

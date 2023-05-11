@@ -14,7 +14,7 @@ import (
 
 	"github.com/open-policy-agent/opa/ast"
 	"github.com/open-policy-agent/opa/storage"
-	"github.com/open-policy-agent/opa/storage/inmem"
+	inmem "github.com/open-policy-agent/opa/storage/inmem/test"
 	"github.com/open-policy-agent/opa/util"
 )
 
@@ -108,27 +108,9 @@ Redo data.test.p = _
 | | Redo data.test.q[x]
 `
 
-	a := strings.Split(expected, "\n")
 	var buf bytes.Buffer
-	PrettyTrace(&buf, *tracer)
-	b := strings.Split(buf.String(), "\n")
-
-	min := len(a)
-	if min > len(b) {
-		min = len(b)
-	}
-
-	for i := 0; i < min; i++ {
-		if a[i] != b[i] {
-			t.Errorf("Line %v in trace is incorrect. Expected %v but got: %v", i+1, a[i], b[i])
-		}
-	}
-
-	if len(a) < len(b) {
-		t.Fatalf("Extra lines in trace:\n%v", strings.Join(b[min:], "\n"))
-	} else if len(b) < len(a) {
-		t.Fatalf("Missing lines in trace:\n%v", strings.Join(a[min:], "\n"))
-	}
+	PrettyTrace(&buf, removeUnifyOps(*tracer))
+	compareBuffers(t, expected, buf.String())
 }
 
 func TestPrettyTraceWithLocation(t *testing.T) {
@@ -186,27 +168,9 @@ query:3     | | Redo plus(x, 1, n)
 query:3     | | Redo data.test.q[x]
 `
 
-	a := strings.Split(expected, "\n")
 	var buf bytes.Buffer
-	PrettyTraceWithLocation(&buf, *tracer)
-	b := strings.Split(buf.String(), "\n")
-
-	min := len(a)
-	if min > len(b) {
-		min = len(b)
-	}
-
-	for i := 0; i < min; i++ {
-		if a[i] != b[i] {
-			t.Errorf("Line %v in trace is incorrect. Expected %v but got: %v", i+1, a[i], b[i])
-		}
-	}
-
-	if len(a) < len(b) {
-		t.Fatalf("Extra lines in trace:\n%v", strings.Join(b[min:], "\n"))
-	} else if len(b) < len(a) {
-		t.Fatalf("Missing lines in trace:\n%v", strings.Join(a[min:], "\n"))
-	}
+	PrettyTraceWithLocation(&buf, removeUnifyOps(*tracer))
+	compareBuffers(t, expected, buf.String())
 }
 
 func TestPrettyTraceWithLocationTruncatedPaths(t *testing.T) {
@@ -271,27 +235,9 @@ authz_bundle/...ternal/authz/policies/abac/v1/beta/policy.rego:5     | | Redo pl
 authz_bundle/...ternal/authz/policies/abac/v1/beta/policy.rego:5     | | Redo data.utils.q[x]
 `
 
-	a := strings.Split(expected, "\n")
 	var buf bytes.Buffer
-	PrettyTraceWithLocation(&buf, *tracer)
-	b := strings.Split(buf.String(), "\n")
-
-	min := len(a)
-	if min > len(b) {
-		min = len(b)
-	}
-
-	for i := 0; i < min; i++ {
-		if a[i] != b[i] {
-			t.Errorf("Line %v in trace is incorrect. Expected %v but got: %v", i+1, a[i], b[i])
-		}
-	}
-
-	if len(a) < len(b) {
-		t.Fatalf("Extra lines in trace:\n%v", strings.Join(b[min:], "\n"))
-	} else if len(b) < len(a) {
-		t.Fatalf("Missing lines in trace:\n%v", strings.Join(a[min:], "\n"))
-	}
+	PrettyTraceWithLocation(&buf, removeUnifyOps(*tracer))
+	compareBuffers(t, expected, buf.String())
 }
 
 func TestPrettyTracePartialWithLocationTruncatedPaths(t *testing.T) {
@@ -454,32 +400,9 @@ query:1                                                              Redo data.e
 query:1                                                              | Fail data.example_rbac.allow
 `
 
-	a := strings.Split(expected, "\n")
 	var buf bytes.Buffer
-	PrettyTraceWithLocation(&buf, *tracer)
-	b := strings.Split(buf.String(), "\n")
-
-	min := len(a)
-	if min > len(b) {
-		min = len(b)
-	}
-
-	for i := 0; i < min; i++ {
-		if a[i] != b[i] {
-			t.Errorf("Line %v in trace is incorrect. Expected %v but got: %v", i+1, a[i], b[i])
-		}
-	}
-
-	if len(a) < len(b) {
-		t.Errorf("Extra lines in trace:\n%v", strings.Join(b[min:], "\n"))
-	} else if len(b) < len(a) {
-		t.Errorf("Missing lines in trace:\n%v", strings.Join(a[min:], "\n"))
-	}
-
-	if t.Failed() {
-		fmt.Println("Trace output:")
-		fmt.Println(buf.String())
-	}
+	PrettyTraceWithLocation(&buf, removeUnifyOps(*tracer))
+	compareBuffers(t, expected, buf.String())
 }
 
 func TestTraceDuplicate(t *testing.T) {
@@ -587,27 +510,9 @@ Redo data.test.p = _
 | | Redo data.test.q[x]
 `
 
-	a := strings.Split(expected, "\n")
 	var buf bytes.Buffer
-	PrettyTrace(&buf, *tracer)
-	b := strings.Split(buf.String(), "\n")
-
-	min := len(a)
-	if min > len(b) {
-		min = len(b)
-	}
-
-	for i := 0; i < min; i++ {
-		if a[i] != b[i] {
-			t.Errorf("Line %v in trace is incorrect. Expected %v but got: %v", i+1, a[i], b[i])
-		}
-	}
-
-	if len(a) < len(b) {
-		t.Fatalf("Extra lines in trace:\n%v", strings.Join(b[min:], "\n"))
-	} else if len(b) < len(a) {
-		t.Fatalf("Missing lines in trace:\n%v", strings.Join(a[min:], "\n"))
-	}
+	PrettyTrace(&buf, removeUnifyOps(*tracer))
+	compareBuffers(t, expected, buf.String())
 }
 
 func TestTraceNoteWithLocation(t *testing.T) {
@@ -670,26 +575,9 @@ query:3     | | Redo plus(x, 1, n)
 query:3     | | Redo data.test.q[x]
 `
 
-	a := strings.Split(expected, "\n")
 	var buf bytes.Buffer
-	PrettyTraceWithLocation(&buf, *tracer)
-	b := strings.Split(buf.String(), "\n")
-	min := len(a)
-	if min > len(b) {
-		min = len(b)
-	}
-
-	for i := 0; i < min; i++ {
-		if a[i] != b[i] {
-			t.Errorf("Line %v in trace is incorrect. Expected %v but got: %v", i+1, a[i], b[i])
-		}
-	}
-
-	if len(a) < len(b) {
-		t.Fatalf("Extra lines in trace:\n%v", strings.Join(b[min:], "\n"))
-	} else if len(b) < len(a) {
-		t.Fatalf("Missing lines in trace:\n%v", strings.Join(a[min:], "\n"))
-	}
+	PrettyTraceWithLocation(&buf, removeUnifyOps(*tracer))
+	compareBuffers(t, expected, buf.String())
 }
 
 func TestMultipleTracers(t *testing.T) {
@@ -777,23 +665,194 @@ func TestTraceRewrittenQueryVars(t *testing.T) {
 	}
 }
 
-func TestTraceRewrittenVarsIssue2022(t *testing.T) {
+func TestTraceRewrittenVars(t *testing.T) {
 
-	input := &Event{
-		Node: &ast.Expr{
-			Terms: ast.VarTerm("foo"),
+	mustParse := func(s string) *ast.Expr {
+		return ast.MustParseBodyWithOpts(s, ast.ParserOptions{FutureKeywords: []string{"every"}})[0]
+	}
+	everyCheck := func(stmt string) func(*testing.T, *Event, *Event) {
+		return func(t *testing.T, _ *Event, output *Event) {
+			exp := mustParse(stmt)
+			if !exp.Equal(output.Node.(*ast.Expr)) {
+				t.Errorf("expected %v to equal %v", output, exp)
+			}
+		}
+	}
+
+	tests := []struct {
+		note string
+		evt  *Event
+		exp  func(*testing.T, *Event, *Event)
+	}{
+		{
+			note: "issue 2022",
+			evt: &Event{
+				Node: ast.NewExpr(ast.VarTerm("foo")),
+				LocalMetadata: map[ast.Var]VarMetadata{
+					ast.Var("foo"): {Name: ast.Var("bar")},
+				},
+			},
+			exp: func(t *testing.T, input *Event, output *Event) {
+				if input.Node == output.Node {
+					t.Fatal("expected node to have been copied")
+				} else if !output.Node.(*ast.Expr).Equal(ast.NewExpr(ast.VarTerm("bar"))) {
+					t.Fatal("expected copy to contain rewritten var")
+				}
+			},
 		},
-		LocalMetadata: map[ast.Var]VarMetadata{
-			ast.Var("foo"): {Name: ast.Var("bar")},
+		{
+			note: "every: key/val rewritten",
+			evt: &Event{
+				Node: mustParse(`every __local0__, __local1__ in __local2__ { __local1__ == __local0__ }`),
+				LocalMetadata: map[ast.Var]VarMetadata{
+					ast.Var("__local0__"): {Name: ast.Var("k")},
+					ast.Var("__local1__"): {Name: ast.Var("v")},
+				},
+			},
+			exp: everyCheck(`every k, v in __local2__ { v == k }`),
+		},
+		{
+			note: "every: key hidden if not rewritten",
+			evt: &Event{
+				Node: mustParse(`every __local0__, __local1__ in __local2__ { __local1__ == 1 }`),
+				LocalMetadata: map[ast.Var]VarMetadata{
+					ast.Var("__local1__"): {Name: ast.Var("v")},
+				},
+			},
+			exp: everyCheck(`every v in __local2__ { v == 1 }`),
+		},
+		{
+			note: "every: key hidden if rewritten to generated key", // NOTE(sr): this would happen for traceRedo
+			evt: &Event{
+				Node: mustParse(`every __local0__, __local1__ in __local2__ { __local1__ == 1 }`),
+				LocalMetadata: map[ast.Var]VarMetadata{
+					ast.Var("__local1__"): {Name: ast.Var("v")},
+					ast.Var("__local0__"): {Name: ast.Var("__local0__")},
+				},
+			},
+			exp: everyCheck(`every v in __local2__ { v == 1 }`),
 		},
 	}
 
-	output := rewrite(input)
+	for _, tc := range tests {
+		t.Run(tc.note, func(t *testing.T) {
+			output := rewrite(tc.evt)
+			tc.exp(t, tc.evt, output)
+		})
+	}
+}
 
-	if input.Node == output.Node {
-		t.Fatal("expected node to have been copied")
-	} else if !output.Node.(*ast.Expr).Equal(ast.NewExpr(ast.VarTerm("bar"))) {
-		t.Fatal("expected copy to contain rewritten var")
+func TestTraceEveryEvaluation(t *testing.T) {
+	ctx := context.Background()
+
+	events := func(es ...string) []string {
+		return es
+	}
+
+	// NOTE(sr): String() on an *Event isn't stable, because iterating the underlying ast.ValueMap isn't.
+	// So we're stubbing out all captured events' value maps to be able to compare these as strings.
+	tests := []struct {
+		note   string
+		query  string
+		module string
+		exp    []string // these need to be found, extra events captured are ignored
+	}{
+		{
+			note:  "empty domain",
+			query: "data.test.p = x",
+			module: `package test
+			p { every k, v in [] { k != v } }`,
+			exp: events(
+				`Enter every __local0__, __local1__ in __local2__ { neq(__local0__, __local1__) } {} (qid=2, pqid=1)`,
+				`Exit every __local0__, __local1__ in __local2__ { neq(__local0__, __local1__) } {} (qid=2, pqid=1)`,
+			),
+		},
+		{
+			note:  "successful eval",
+			query: "data.test.p = x",
+			module: `package test
+			p { every k, v in [1] { k != v } }`,
+			exp: events(
+				`Enter every __local0__, __local1__ in __local2__ { neq(__local0__, __local1__) } {} (qid=2, pqid=1)`,
+				`Enter neq(__local0__, __local1__) {} (qid=3, pqid=2)`,
+				`Exit neq(__local0__, __local1__) {} (qid=3, pqid=2)`,
+				`Redo every __local0__, __local1__ in __local2__ { neq(__local0__, __local1__) } {} (qid=2, pqid=1)`,
+				`Exit every __local0__, __local1__ in __local2__ { neq(__local0__, __local1__) } {} (qid=2, pqid=1)`,
+			),
+		},
+		{
+			note:  "failure in first body query",
+			query: "data.test.p = x",
+			module: `package test
+			p { every v in [1, 2] { 1 != v } }`,
+			exp: events(
+				`Enter every __local0__, __local1__ in __local2__ { neq(1, __local1__) } {} (qid=2, pqid=1)`,
+				`Enter neq(1, __local1__) {} (qid=3, pqid=2)`,
+				`Fail neq(1, __local1__) {} (qid=3, pqid=2)`,
+				`Fail every __local0__, __local1__ in __local2__ { neq(1, __local1__) } {} (qid=2, pqid=1)`,
+				`Redo every __local0__, __local1__ in __local2__ { neq(1, __local1__) } {} (qid=2, pqid=1)`,
+			),
+		},
+		{
+			note:  "failure in last body query",
+			query: "data.test.p = x",
+			module: `package test
+			p { every v in [0, 1] { 1 != v } }`,
+			exp: events(
+				`Enter every __local0__, __local1__ in __local2__ { neq(1, __local1__) } {} (qid=2, pqid=1)`,
+				`Enter neq(1, __local1__) {} (qid=3, pqid=2)`,
+				`Exit neq(1, __local1__) {} (qid=3, pqid=2)`,
+				`Enter neq(1, __local1__) {} (qid=4, pqid=2)`,
+				`Fail neq(1, __local1__) {} (qid=4, pqid=2)`,
+				`Fail every __local0__, __local1__ in __local2__ { neq(1, __local1__) } {} (qid=2, pqid=1)`,
+				`Redo every __local0__, __local1__ in __local2__ { neq(1, __local1__) } {} (qid=2, pqid=1)`,
+			),
+		},
+	}
+
+	for _, tc := range tests {
+
+		opts := ast.CompileOpts{ParserOptions: ast.ParserOptions{FutureKeywords: []string{"every"}}}
+		compiler, err := ast.CompileModulesWithOpt(map[string]string{"test.rego": tc.module}, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		queryCompiler := compiler.QueryCompiler()
+
+		compiledQuery, err := queryCompiler.Compile(ast.MustParseBody(tc.query))
+		if err != nil {
+			t.Fatalf("unexpected error: %s", err)
+		}
+
+		buf := NewBufferTracer()
+		query := NewQuery(compiledQuery).
+			WithQueryCompiler(queryCompiler).
+			WithCompiler(compiler).
+			WithStore(inmem.New()).
+			WithQueryTracer(buf)
+
+		if _, err := query.Run(ctx); err != nil {
+			t.Fatalf("unexpected error: %s", err)
+		}
+
+		for _, exp := range tc.exp {
+			found := false
+			for _, act := range *buf {
+				act.Locals = nil
+				if act.String() == exp {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("expected event %v, found none", exp)
+			}
+		}
+		if t.Failed() {
+			t.Log("captured events:")
+			for _, ev := range *buf {
+				t.Log(ev.String())
+			}
+		}
 	}
 }
 
@@ -960,4 +1019,283 @@ func TestBufferTracerTraceConfig(t *testing.T) {
 	if !reflect.DeepEqual(expected, conf) {
 		t.Fatalf("Expected config: %+v, got %+v", expected, conf)
 	}
+}
+
+func TestTraceInput(t *testing.T) {
+	ctx := context.Background()
+	module := `
+		package test
+
+		rule = x {
+			x = input.v
+		}
+	`
+
+	compiler := compileModules([]string{module})
+	queryCompiler := compiler.QueryCompiler()
+
+	compiledQuery, err := queryCompiler.Compile(ast.MustParseBody("{x | v = [1, 2, 3][_];  x = data.test.rule with input.v as v}"))
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+
+	tracer := NewBufferTracer()
+	query := NewQuery(compiledQuery).
+		WithQueryCompiler(queryCompiler).
+		WithCompiler(compiler).
+		WithStore(inmem.New()).
+		WithQueryTracer(tracer)
+
+	if _, err := query.Run(ctx); err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+
+	num := 1
+	for i, evt := range *tracer {
+		if evt.Op == ExitOp && evt.HasRule() {
+			input := evt.Input().Value
+			expected := ast.NewObject([2]*ast.Term{ast.StringTerm("v"), ast.IntNumberTerm(num)})
+			if input.Compare(expected) != 0 {
+				t.Errorf("%v != %v at index %d", input, expected, i)
+			}
+			num++
+		}
+	}
+}
+
+func TestTracePlug(t *testing.T) {
+	ctx := context.Background()
+	module := `
+		package test
+
+		rule[[a, b]] {
+			a = [1, 2][_]
+			b = [2, 1][_]
+		}
+	`
+
+	compiler := compileModules([]string{module})
+	queryCompiler := compiler.QueryCompiler()
+
+	compiledQuery, err := queryCompiler.Compile(ast.MustParseBody("data.test.rule"))
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+
+	tracer := plugRuleHeadKeyRecorder{}
+	query := NewQuery(compiledQuery).
+		WithQueryCompiler(queryCompiler).
+		WithCompiler(compiler).
+		WithStore(inmem.New()).
+		WithQueryTracer(&tracer)
+
+	if _, err := query.Run(ctx); err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+
+	expected := []ast.Value{
+		ast.NewArray(ast.NumberTerm("1"), ast.NumberTerm("2")),
+		ast.NewArray(ast.NumberTerm("1"), ast.NumberTerm("1")),
+		ast.NewArray(ast.NumberTerm("2"), ast.NumberTerm("2")),
+		ast.NewArray(ast.NumberTerm("2"), ast.NumberTerm("1")),
+	}
+
+	if len(tracer) != len(expected) {
+		t.Fatalf("unexpected result length %d", len(tracer))
+	}
+
+	for i, value := range tracer {
+		if value.Compare(expected[i]) != 0 {
+			t.Errorf("%v != %v at index %d", value, expected[i], i)
+		}
+	}
+}
+
+type plugRuleHeadKeyRecorder []ast.Value
+
+func (plugRuleHeadKeyRecorder) Enabled() bool {
+	return true
+}
+
+func (pr *plugRuleHeadKeyRecorder) TraceEvent(evt Event) {
+	if evt.Op == ExitOp && evt.HasRule() {
+		*pr = append(*pr, evt.Plug(evt.Node.(*ast.Rule).Head.Key).Value)
+	}
+}
+
+func (plugRuleHeadKeyRecorder) Config() TraceConfig {
+	return TraceConfig{PlugLocalVars: false}
+}
+
+func compareBuffers(t *testing.T, expected, actual string) {
+	t.Helper()
+	a := strings.Split(expected, "\n")
+	b := strings.Split(actual, "\n")
+	min := len(a)
+	if min > len(b) {
+		min = len(b)
+	}
+
+	for i := 0; i < min; i++ {
+		if a[i] != b[i] {
+			t.Errorf("Line %v in trace is incorrect. Expected %q but got: %q", i+1, a[i], b[i])
+		}
+	}
+
+	if len(a) < len(b) {
+		t.Errorf("Extra lines in trace:\n%v", strings.Join(b[min:], "\n"))
+	} else if len(b) < len(a) {
+		t.Errorf("Missing lines in trace:\n%v", strings.Join(a[min:], "\n"))
+	}
+
+	if t.Failed() {
+		fmt.Println("Trace output:")
+		fmt.Println(actual)
+	}
+}
+
+func TestPrettyTraceWithLocationForMetadataCall(t *testing.T) {
+	module := `package test
+rule_no_output_var := rego.metadata.rule()
+
+rule_with_output_var {
+	foo := rego.metadata.rule()
+	foo == {}
+}
+
+chain_no_output_var := rego.metadata.chain()
+
+chain_with_output_var {
+	foo := rego.metadata.chain()
+	foo == []
+}`
+
+	ctx := context.Background()
+	compiler := compileModules([]string{module})
+	data := loadSmallTestData()
+	store := inmem.NewFromObject(data)
+	txn := storage.NewTransactionOrDie(ctx, store)
+	defer store.Abort(ctx, txn)
+
+	tracer := NewBufferTracer()
+	query := NewQuery(ast.MustParseBody("data.test = _")).
+		WithCompiler(compiler).
+		WithStore(store).
+		WithTransaction(txn).
+		WithTracer(tracer)
+
+	_, err := query.Run(ctx)
+	if err != nil {
+		panic(err)
+	}
+
+	expected := `query:1      Enter data.test = _
+query:1      | Eval data.test = _
+query:1      | Index data.test.chain_no_output_var (matched 1 rule)
+query:9      | Enter data.test.chain_no_output_var
+query:9      | | Eval __local8__ = [{"path": ["test", "chain_no_output_var"]}]
+query:9      | | Eval true
+query:9      | | Eval __local4__ = __local8__
+query:9      | | Exit data.test.chain_no_output_var
+query:9      | Redo data.test.chain_no_output_var
+query:9      | | Redo __local4__ = __local8__
+query:9      | | Redo true
+query:9      | | Redo __local8__ = [{"path": ["test", "chain_no_output_var"]}]
+query:1      | Index data.test.chain_with_output_var (matched 1 rule, early exit)
+query:11     | Enter data.test.chain_with_output_var
+query:12     | | Eval __local9__ = [{"path": ["test", "chain_with_output_var"]}]
+query:12     | | Eval __local5__ = __local9__
+query:12     | | Eval foo = __local5__
+query:13     | | Eval foo = []
+query:13     | | Fail foo = []
+query:12     | | Redo foo = __local5__
+query:12     | | Redo __local5__ = __local9__
+query:12     | | Redo __local9__ = [{"path": ["test", "chain_with_output_var"]}]
+query:1      | Index data.test.rule_no_output_var (matched 1 rule)
+query:2      | Enter data.test.rule_no_output_var
+query:2      | | Eval __local6__ = {}
+query:2      | | Eval true
+query:2      | | Eval __local2__ = __local6__
+query:2      | | Exit data.test.rule_no_output_var
+query:2      | Redo data.test.rule_no_output_var
+query:2      | | Redo __local2__ = __local6__
+query:2      | | Redo true
+query:2      | | Redo __local6__ = {}
+query:1      | Index data.test.rule_with_output_var (matched 1 rule, early exit)
+query:4      | Enter data.test.rule_with_output_var
+query:5      | | Eval __local7__ = {}
+query:5      | | Eval __local3__ = __local7__
+query:5      | | Eval foo = __local3__
+query:6      | | Eval foo = {}
+query:4      | | Exit data.test.rule_with_output_var early
+query:4      | Redo data.test.rule_with_output_var
+query:6      | | Redo foo = {}
+query:5      | | Redo foo = __local3__
+query:5      | | Redo __local3__ = __local7__
+query:5      | | Redo __local7__ = {}
+query:1      | Exit data.test = _
+query:1      Redo data.test = _
+query:1      | Redo data.test = _
+`
+
+	var buf bytes.Buffer
+	PrettyTraceWithLocation(&buf, removeUnifyOps(*tracer))
+	compareBuffers(t, expected, buf.String())
+}
+
+func TestPrettyTraceWithUnifyOps(t *testing.T) {
+	module := `package test
+
+	p[x] {
+		x = 1
+	}`
+
+	ctx := context.Background()
+	compiler := compileModules([]string{module})
+	store := inmem.NewFromObject(nil)
+	txn := storage.NewTransactionOrDie(ctx, store)
+	defer store.Abort(ctx, txn)
+
+	tracer := NewBufferTracer()
+	query := NewQuery(ast.MustParseBody("data.test.p")).
+		WithCompiler(compiler).
+		WithStore(store).
+		WithTransaction(txn).
+		WithTracer(tracer)
+
+	_, err := query.Run(ctx)
+	if err != nil {
+		panic(err)
+	}
+
+	expected := `query:1     Enter data.test.p
+query:1     | Eval data.test.p
+query:1     | Unify data.test.p = _
+query:1     | Index data.test.p (matched 1 rule)
+query:3     | Enter data.test.p
+query:4     | | Eval x = 1
+query:4     | | Unify x = 1
+query:3     | | Exit data.test.p
+query:3     | Redo data.test.p
+query:4     | | Redo x = 1
+query:1     | Unify {1} = _
+query:1     | Exit data.test.p
+query:1     Redo data.test.p
+query:1     | Redo data.test.p
+`
+
+	var buf bytes.Buffer
+	PrettyTraceWithLocation(&buf, *tracer)
+	compareBuffers(t, expected, buf.String())
+}
+
+// removeUnifyOps removes all UnifyOp events from a trace, since this is
+// too verbose to test everywhere.
+func removeUnifyOps(trace []*Event) (result []*Event) {
+	for _, event := range trace {
+		if event.Op != UnifyOp {
+			result = append(result, event)
+		}
+	}
+	return
 }

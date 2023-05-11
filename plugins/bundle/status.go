@@ -5,11 +5,13 @@
 package bundle
 
 import (
+	"encoding/json"
+	"errors"
+	"strconv"
 	"time"
 
-	"github.com/pkg/errors"
-
 	"github.com/open-policy-agent/opa/ast"
+	"github.com/open-policy-agent/opa/download"
 	"github.com/open-policy-agent/opa/metrics"
 	"github.com/open-policy-agent/opa/server/types"
 )
@@ -23,6 +25,8 @@ type Status struct {
 	Name                     string          `json:"name"`
 	ActiveRevision           string          `json:"active_revision,omitempty"`
 	LastSuccessfulActivation time.Time       `json:"last_successful_activation,omitempty"`
+	Type                     string          `json:"type,omitempty"`
+	Size                     int             `json:"size,omitempty"`
 	LastSuccessfulDownload   time.Time       `json:"last_successful_download,omitempty"`
 	LastSuccessfulRequest    time.Time       `json:"last_successful_request,omitempty"`
 	LastRequest              time.Time       `json:"last_request,omitempty"`
@@ -30,6 +34,7 @@ type Status struct {
 	Message                  string          `json:"message,omitempty"`
 	Errors                   []error         `json:"errors,omitempty"`
 	Metrics                  metrics.Metrics `json:"metrics,omitempty"`
+	HTTPCode                 json.Number     `json:"http_code,omitempty"`
 }
 
 // SetActivateSuccess updates the status object to reflect a successful
@@ -50,28 +55,42 @@ func (s *Status) SetRequest() {
 	s.LastRequest = time.Now().UTC()
 }
 
+func (s *Status) SetBundleSize(size int) {
+	s.Size = size
+}
+
 // SetError updates the status object to reflect a failure to download or
 // activate. If err is nil, the error status is cleared.
 func (s *Status) SetError(err error) {
-
-	if err == nil {
+	var (
+		astErrors ast.Errors
+		httpError download.HTTPError
+	)
+	switch {
+	case err == nil:
 		s.Code = ""
+		s.HTTPCode = ""
 		s.Message = ""
 		s.Errors = nil
-		return
-	}
 
-	cause := errors.Cause(err)
-
-	if astErr, ok := cause.(ast.Errors); ok {
+	case errors.As(err, &astErrors):
 		s.Code = errCode
+		s.HTTPCode = ""
 		s.Message = types.MsgCompileModuleError
-		s.Errors = make([]error, len(astErr))
-		for i := range astErr {
-			s.Errors[i] = astErr[i]
+		s.Errors = make([]error, len(astErrors))
+		for i := range astErrors {
+			s.Errors[i] = astErrors[i]
 		}
-	} else {
+
+	case errors.As(err, &httpError):
 		s.Code = errCode
+		s.HTTPCode = json.Number(strconv.Itoa(httpError.StatusCode))
+		s.Message = err.Error()
+		s.Errors = nil
+
+	default:
+		s.Code = errCode
+		s.HTTPCode = ""
 		s.Message = err.Error()
 		s.Errors = nil
 	}

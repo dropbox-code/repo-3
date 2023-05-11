@@ -187,7 +187,7 @@ Often you don't want to invent new variable names for iteration.  OPA provides t
 
 ### Builtins
 
-On line 5 the *builtin* `startswith` checks if one string is a prefix of the other.  The builtin `sprintf` on line 6 formats a string with arguments.  OPA has 50+ builtins detailed at [openpolicyagent.org/docs/policy-reference](../policy-reference).
+On line 5 the *builtin* `startswith` checks if one string is a prefix of the other.  The builtin `sprintf` on line 6 formats a string with arguments.  OPA has 150+ builtins detailed in [the Policy Reference](../policy-reference/#built-in-functions).
 Builtins let you analyze and manipulate:
 
 * Numbers, Strings, Regexs, Networks
@@ -226,7 +226,7 @@ test_image_safety {                                       # line 3
 
 **Different Package**. On line 1 the `package` directive puts these tests in a different package than admission control policy itself.  This is the recommended best practice.
 
-**Import**.  On line 2 `import data.kubernetes.admission` allows us to reference the admission control policy using the name `admission` everwhere in the test package.  `import` is not strictly necessary--it simply sets up an alias; you could instead reference `data.kubernetes.admission` inside the rules.
+**Import**.  On line 2 `import data.kubernetes.admission` allows us to reference the admission control policy using the name `admission` everywhere in the test package.  `import` is not strictly necessary--it simply sets up an alias; you could instead reference `data.kubernetes.admission` inside the rules.
 
 **Unit Test**.  On line 3 `test_image_safety` defines a unittest.  If the rule evaluates to true the test passes; otherwise it fails.  When you use the OPA test runner, anything in any package starting with `test` is treated as a test.
 
@@ -488,17 +488,17 @@ package system
 
 import data.kubernetes.admission
 
-main = {
+main := {
   "apiVersion": "admission.k8s.io/v1",
   "kind": "AdmissionReview",
   "response": response,
 }
 
-default uid = ""
+default uid := ""
 
-uid = input.request.uid
+uid := input.request.uid
 
-response = {
+response := {
     "allowed": false,
     "uid": uid,
     "status": {
@@ -508,7 +508,8 @@ response = {
     reason := concat(", ", admission.deny)
     reason != ""
 }
-else = {"allowed": true, "uid": uid}
+
+else := {"allowed": true, "uid": uid}
 ```
 
 The `system.main` policy MUST generate an **AdmissionReview** object containing

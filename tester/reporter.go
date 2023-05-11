@@ -11,10 +11,9 @@ import (
 	"io"
 	"strings"
 
-	"github.com/open-policy-agent/opa/topdown"
-
 	"github.com/open-policy-agent/opa/ast"
 	"github.com/open-policy-agent/opa/cover"
+	"github.com/open-policy-agent/opa/topdown"
 )
 
 // Reporter defines the interface for reporting test results.
@@ -39,7 +38,8 @@ func (r PrettyReporter) Report(ch chan *Result) error {
 
 	dirty := false
 	var pass, fail, skip, errs int
-	var results, failures []*Result
+	results := make([]*Result, 0, len(ch))
+	var failures []*Result
 
 	for tr := range ch {
 		if tr.Pass() {
@@ -71,33 +71,26 @@ func (r PrettyReporter) Report(ch chan *Result) error {
 	}
 
 	// Report individual tests.
+	var lastFile string
 	for _, tr := range results {
+
 		if tr.Pass() && r.BenchmarkResults {
 			dirty = true
 			fmt.Fprintln(r.Output, r.fmtBenchmark(tr))
-		} else if r.Verbose {
+		} else if r.Verbose || !tr.Pass() {
+			if tr.Location != nil && tr.Location.File != lastFile {
+				if lastFile != "" {
+					fmt.Fprintln(r.Output, "")
+				}
+				fmt.Fprintf(r.Output, "%s:\n", tr.Location.File)
+				lastFile = tr.Location.File
+			}
 			dirty = true
 			fmt.Fprintln(r.Output, tr)
 			if len(tr.Output) > 0 {
 				fmt.Fprintln(r.Output)
 				fmt.Fprintln(newIndentingWriter(r.Output), strings.TrimSpace(string(tr.Output)))
 				fmt.Fprintln(r.Output)
-			}
-		} else if !tr.Pass() {
-			dirty = true
-			if r.FailureLine {
-				if tr.FailedAt != nil {
-					fmt.Fprintf(r.Output, "%v (%s:%d) \n", tr, tr.FailedAt.Location.File, tr.FailedAt.Location.Row)
-				} else {
-					fmt.Fprintf(r.Output, "%v (test skipped because success not possible) \n", tr)
-				}
-			} else {
-				fmt.Fprintln(r.Output, tr)
-				if len(tr.Output) > 0 {
-					fmt.Fprintln(r.Output)
-					fmt.Fprintln(newIndentingWriter(r.Output), strings.TrimSpace(string(tr.Output)))
-					fmt.Fprintln(r.Output)
-				}
 			}
 		}
 		if tr.Error != nil {
@@ -149,7 +142,7 @@ func (r PrettyReporter) fmtBenchmark(tr *Result) string {
 		// like BenchmarkDataFooBarTestAuth.
 		camelCaseName := ""
 		for _, part := range strings.Split(strings.Replace(name, "_", ".", -1), ".") {
-			camelCaseName += strings.Title(part)
+			camelCaseName += strings.Title(part) //nolint:staticcheck // SA1019, no unicode here
 		}
 		name = "Benchmark" + camelCaseName
 	}
@@ -169,7 +162,7 @@ type JSONReporter struct {
 
 // Report prints the test report to the reporter's output.
 func (r JSONReporter) Report(ch chan *Result) error {
-	var report []*Result
+	report := make([]*Result, 0, len(ch))
 	for tr := range ch {
 		report = append(report, tr)
 	}

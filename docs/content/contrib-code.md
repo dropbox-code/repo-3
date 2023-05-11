@@ -28,7 +28,7 @@ implementing it inside of the
 `github.com/open-policy-agent/opa/internal` package. The `internal`
 package is not visible outside of OPA.
 
-Avoid adding thirdparty dependencies (vendoring). OPA is designed to be minimal,
+Avoid adding third-party dependencies (vendoring). OPA is designed to be minimal,
 lightweight, and easily embedded. Vendoring may make features _easier_ to
 implement however they come with their own cost for both OPA developers and
 OPA users (e.g., vendoring conflicts, security, debugging, etc.)
@@ -133,6 +133,31 @@ the review process. Use your judgement about what constitutes a small Pull
 Request.  If you aren't sure, send a message to the OPA slack or post a comment
 on the Pull Request.
 
+### Vulnerability scanning
+
+On each Pull Request, a series of tests will be run to ensure that the code
+is up to standard. Part of this process is also to run vulnerability scanning
+on the code and on the generated container image.
+
+[Trivy](https://aquasecurity.github.io/trivy/) is used to run the aforementioned
+vulnerability scanning. To install, follow the [installation instructions](
+https://aquasecurity.github.io/trivy/v0.29.2/getting-started/installation/).
+
+To run the vulnerability scanning, on the code-base, run the following command:
+
+```bash
+$ trivy fs .
+```
+
+To run the vulnerability scanning on the container image, run the following command:
+
+```bash
+$ trivy image <Image tag>
+```
+
+If the tool catches any false positives, it's recommended to appropriately document them
+in the `.trivyignore` file.
+
 ## Contribution process
 
 Small bug fixes (or other small improvements) can be submitted directly via a
@@ -148,5 +173,5 @@ Before submitting large changes, please open an issue on GitHub outlining:
 
 Use your judgement about what constitutes a large change. If you aren't sure,
 send a message in 
-[#development](https://openpolicyagent.slack.com/archives/C02L1TLPN59) on Slack 
+[#contributors](https://openpolicyagent.slack.com/archives/C02L1TLPN59) on Slack 
 or submit [an issue on GitHub](https://github.com/open-policy-agent/opa/issues).

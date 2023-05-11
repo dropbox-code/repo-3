@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 
 EXCEPTIONS=(
-  "internal/compiler/wasm/opa/opa.go"
   "internal/compiler/wasm/opa/opa.wasm"
   "internal/compiler/wasm/opa/callgraph.csv"
 )
@@ -26,5 +25,7 @@ if [[ "${HAS_CHANGES}" == "1" ]]; then
   echo ""
   echo "git status"
   git status
+  echo "git diff"
+  git diff
   exit 1
 fi

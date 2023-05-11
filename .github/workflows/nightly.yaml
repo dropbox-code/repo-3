@@ -8,10 +8,10 @@ on:
 jobs:
   race-detector:
     name: Go Race Detector
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - name: Check out code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
 
       - name: Test with Race Detector
         run: CGO_ENABLED=1 make ci-go-race-detector
@@ -27,28 +27,22 @@ jobs:
 
   native-fuzzer:
     name: Go Fuzzer (native)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - name: Check out code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
 
       - id: go_version
         name: Read go version
-        run: echo "::set-output name=go_version::$(cat .go-version)"
+        run: echo "go_version=$(cat .go-version)" >> $GITHUB_OUTPUT
 
       - name: Install Go (${{ steps.go_version.outputs.go_version }})
-        uses: actions/setup-go@v2
+        uses: actions/setup-go@v4
         with:
           go-version: ${{ steps.go_version.outputs.go_version }}
 
-      - name: Install gotip
-        run: |
-          go install golang.org/dl/gotip@latest
-          gotip download
-          gotip version
-
-      - name: gotip test -fuzz
-        run: gotip test ./ast -fuzz FuzzParseStatementsAndCompileModules -fuzztime 1h -v -run '^$'
+      - name: go test -fuzz
+        run: go test ./ast -fuzz FuzzParseStatementsAndCompileModules -fuzztime 1h -v -run '^$'
 
       - name: Dump crashers
         if: ${{ failure() }}
@@ -63,26 +57,18 @@ jobs:
           status: ${{ job.status }}
           fields: repo,workflow
 
-  fuzzer:
-    name: Go Fuzzer
-    runs-on: ubuntu-latest
+  go-perf:
+    name: Go Perf
+    runs-on: ubuntu-22.04
     steps:
       - name: Check out code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
 
-      - name: Run go-fuzz
-        run: make ci-go-check-fuzz
-
-      - name: Dump crashers
-        if: ${{ failure() }}
-        run: find build/fuzzer/workdir/crashers -name '*.quoted' -print -exec cat {} \;
-
-      - name: Upload Workdir
-        if: ${{ failure() }}
-        uses: actions/upload-artifact@v2
-        with:
-          name: workdir
-          path: ./build/fuzzer/workdir
+      - name: Benchmark Test Golang
+        run: make ci-go-perf
+        timeout-minutes: 30
+        env:
+          DOCKER_RUNNING: 0
 
       - name: Slack Notification
         uses: 8398a7/action-slack@v3
@@ -95,14 +81,98 @@ jobs:
 
   go-proxy-check:
     name: Go mod check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - name: Check out code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
 
       - name: Vendor without proxy
         run: make check-go-module
         timeout-minutes: 30
+
+      - name: Slack Notification
+        uses: 8398a7/action-slack@v3
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_NOTIFICATION_WEBHOOK }}
+        if: ${{ failure() && env.SLACK_WEBHOOK_URL }}
+        with:
+          status: ${{ job.status }}
+          fields: repo,workflow
+
+  trivy-scan-image:
+    name: Trivy security scan image
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout code # needed for .trivyignore file
+        uses: actions/checkout@v3
+
+      - run: "docker pull openpolicyagent/opa:edge-static"
+
+      # Equivalent to:
+      # $ trivy image openpolicyagent/opa:edge-static
+      - name: Run Trivy scan on image
+        uses: aquasecurity/trivy-action@0.10.0
+        with:
+          image-ref: 'openpolicyagent/opa:edge-static'
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+
+      - name: Slack Notification
+        uses: 8398a7/action-slack@v3
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_NOTIFICATION_WEBHOOK }}
+        if: ${{ failure() && env.SLACK_WEBHOOK_URL }}
+        with:
+          status: ${{ job.status }}
+          fields: repo,workflow
+
+  trivy-scan-repo:
+    name: Trivy security scan repo
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # Equivalent to:
+      # $ trivy fs .
+      - name: Run Trivy scan on repo
+        uses: aquasecurity/trivy-action@0.10.0
+        with:
+          scan-type: fs
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          skip-dirs: vendor/,internal/gqlparser/validator/imported/
+          severity: CRITICAL,HIGH
+
+      - name: Slack Notification
+        uses: 8398a7/action-slack@v3
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_NOTIFICATION_WEBHOOK }}
+        if: ${{ failure() && env.SLACK_WEBHOOK_URL }}
+        with:
+          status: ${{ job.status }}
+          fields: repo,workflow
+
+  govulncheck:
+    name: Go vulnerability check
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v3
+      - id: go_version
+        name: Read go version
+        run: echo "go_version=$(cat .go-version)" >> $GITHUB_OUTPUT
+
+      - name: Install Go (${{ steps.go_version.outputs.go_version }})
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ steps.go_version.outputs.go_version }}
+
+      - run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - run: govulncheck ./...
 
       - name: Slack Notification
         uses: 8398a7/action-slack@v3

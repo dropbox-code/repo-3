@@ -17,9 +17,9 @@
 {{ $contrib     := where $allDocs ".Params.kind" "eq" "contrib" }}
 {{ $misc        := where $allDocs ".Params.kind" "eq" "misc" }}
 {{ $version     := index (split .File.Path "/") 1 }}
-{{ $pageUrl     := .URL }}
+{{ $pageUrl     := .Permalink }}
 <nav class="navbar is-primary">
-  <div class="navbar-brand is-hidden-tablet">
+  <div class="navbar-brand is-hidden-desktop">
     <a class="navbar-item" href="{{ $home }}">
       <img src="{{ $logo }}">
     </a>
@@ -31,13 +31,13 @@
     </a>
   </div>
 
-  <div class="navbar-menu is-hidden-tablet" id="mobile-menu">
+  <div class="navbar-menu is-hidden-desktop" id="mobile-menu">
     <div class="navbar-start">
       <span class="navbar-item is-size-5 has-text-weight-light is-uppercase">
         Core Docs
       </span>
 
-      <a class="navbar-item" href="{{ $docsHome.URL }}">
+      <a class="navbar-item" href="{{ $docsHome.Permalink }}">
         {{ $docsHome.Name }}
       </a>
 
@@ -66,6 +66,9 @@
       </span>
       <a class="navbar-item" href="/support">
         Enterprise and Commercial
+      </a>
+      <a class="navbar-item" href="/community">
+        Community
       </a>
     </div>
 
@@ -110,11 +113,18 @@
     <div class="navbar-end">
       <div class="navbar-item">
         <p class="control has-icons-right">
-          <input class="input" type="search" id="search-bar" placeholder="Search...">
+          <div id="docsearch">
+          </div>
           <span class="icon is-small is-right">
             <icon />
           </span>
         </p>
+      </div>
+
+      <div class="navbar-item">
+        <a class="button is-success has-text-weight-semibold" href="https://play.openpolicyagent.org/" target="_blank" title="Playground">
+          Playground
+        </a>
       </div>
 
       <a class="navbar-item" href="{{ $github }}" target="_blank" title="GitHub">

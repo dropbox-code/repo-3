@@ -9,7 +9,7 @@ It covers the OPA-kubernetes version that uses kube-mgmt.
 The [OPA Gatekeeper version](https://open-policy-agent.github.io/gatekeeper) has its own docs.
 For the purpose of the tutorial we will deploy two policies that ensure:
 
-- Ingress hostnames must be whitelisted on the Namespace containing the Ingress.
+- Ingress hostnames must be on allowlist on the Namespace containing the Ingress.
 - Two ingresses in different namespaces must not have the same hostname.
 
 > 💡 Kubernetes does not guarantee consistency across resources. If two
@@ -70,33 +70,33 @@ certificate authority (CA) and certificate/key pair for OPA:
 
 ```bash
 openssl genrsa -out ca.key 2048
-openssl req -x509 -new -nodes -key ca.key -days 100000 -out ca.crt -subj "/CN=admission_ca"
+openssl req -x509 -new -nodes -sha256 -key ca.key -days 100000 -out ca.crt -subj "/CN=admission_ca"
 ```
 
 Generate the TLS key and certificate for OPA:
 
 ```bash
 cat >server.conf <<EOF
-[req]
-req_extensions = v3_req
-distinguished_name = req_distinguished_name
+[ req ]
 prompt = no
-[req_distinguished_name]
+req_extensions = v3_ext
+distinguished_name = dn
+
+[ dn ]
 CN = opa.opa.svc
-[ v3_req ]
+
+[ v3_ext ]
 basicConstraints = CA:FALSE
 keyUsage = nonRepudiation, digitalSignature, keyEncipherment
 extendedKeyUsage = clientAuth, serverAuth
-subjectAltName = @alt_names
-[alt_names]
-DNS.1 = opa.opa.svc
+subjectAltName = DNS:opa.opa.svc,DNS:opa.opa.svc.cluster,DNS:opa.opa.svc.cluster.local
 EOF
 ```
 
 ```bash
 openssl genrsa -out server.key 2048
-openssl req -new -key server.key -out server.csr -config server.conf
-openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out server.crt -days 100000 -extensions v3_req -extfile server.conf
+openssl req -new -key server.key -sha256 -out server.csr -extensions v3_ext -config server.conf
+openssl x509 -req -in server.csr -sha256 -CA ca.crt -CAkey ca.key -CAcreateserial -out server.crt -days 100000 -extensions v3_ext -extfile server.conf
 ```
 
 > Note: the Common Name value and Subject Alternative Name you give to openssl MUST match the name of the OPA service created below.
@@ -120,14 +120,14 @@ mkdir policies && cd policies
 Create a policy that restricts the hostnames that an ingress can use. Only hostnames matching the specified regular
 expressions will be allowed.
 
-**ingress-whitelist.rego**:
+**ingress-allowlist.rego**:
 
-```live:ingress_whitelist:module:read_only
+```live:ingress_allowlist:module:read_only
 package kubernetes.admission
 
 import data.kubernetes.namespaces
 
-operations = {"CREATE", "UPDATE"}
+operations := {"CREATE", "UPDATE"}
 
 deny[msg] {
 	input.request.kind.kind == "Ingress"
@@ -137,9 +137,9 @@ deny[msg] {
 	msg := sprintf("invalid ingress host %q", [host])
 }
 
-valid_ingress_hosts = {host |
-	whitelist := namespaces[input.request.namespace].metadata.annotations["ingress-whitelist"]
-	hosts := split(whitelist, ",")
+valid_ingress_hosts := {host |
+	allowlist := namespaces[input.request.namespace].metadata.annotations["ingress-allowlist"]
+	hosts := split(allowlist, ",")
 	host := hosts[_]
 }
 
@@ -150,9 +150,6 @@ fqdn_matches_any(str, patterns) {
 fqdn_matches(str, pattern) {
 	pattern_parts := split(pattern, ".")
 	pattern_parts[0] == "*"
-	str_parts := split(str, ".")
-	n_pattern_parts := count(pattern_parts)
-	n_str_parts := count(str_parts)
 	suffix := trim(pattern, "*.")
 	endswith(str, suffix)
 }
@@ -199,17 +196,17 @@ package system
 
 import data.kubernetes.admission
 
-main = {
+main := {
   "apiVersion": "admission.k8s.io/v1",
   "kind": "AdmissionReview",
   "response": response,
 }
 
-default uid = ""
+default uid := ""
 
-uid = input.request.uid
+uid := input.request.uid
 
-response = {
+response := {
     "allowed": false,
     "uid": uid,
     "status": {
@@ -219,7 +216,8 @@ response = {
     reason = concat(", ", admission.deny)
     reason != ""
 }
-else = {"allowed": true, "uid": uid}
+
+else := {"allowed": true, "uid": uid}
 ```
 
 > ⚠️ When OPA receives a request, it executes a query against the document defined `data.system.main` by default.
@@ -337,7 +335,7 @@ spec:
         # authentication and authorization on the daemon. See the Security page for
         # details: https://www.openpolicyagent.org/docs/security.html.
         - name: opa
-          image: openpolicyagent/opa:{{< current_docker_version >}}-rootless
+          image: openpolicyagent/opa:{{< current_docker_version >}}
           args:
             - "run"
             - "--server"
@@ -455,7 +453,7 @@ apiVersion: v1
 kind: Namespace
 metadata:
   annotations:
-    ingress-whitelist: "*.qa.acmecorp.com,*.internal.acmecorp.com"
+    ingress-allowlist: "*.qa.acmecorp.com,*.internal.acmecorp.com"
   name: qa
 ```
 
@@ -466,7 +464,7 @@ apiVersion: v1
 kind: Namespace
 metadata:
   annotations:
-    ingress-whitelist: "*.acmecorp.com"
+    ingress-allowlist: "*.acmecorp.com"
   name: production
 ```
 
@@ -527,12 +525,12 @@ kubectl create -f ingress-ok.yaml -n production
 kubectl create -f ingress-bad.yaml -n qa
 ```
 
-The second Ingress is rejected because its hostname does not match the whitelist in the `qa` namespace.
+The second Ingress is rejected because its hostname does not match the allowlist in the `qa` namespace.
 
 It will report an error as follows:
 
 ```
-Error from server: error when creating "ingress-bad.yaml": admission webhook "validating-webhook.openpolicyagent.org" 
+Error from server: error when creating "ingress-bad.yaml": admission webhook "validating-webhook.openpolicyagent.org"
 denied the request: invalid ingress host "acmecorp.com"
 ```
 
@@ -548,7 +546,7 @@ apiVersion: v1
 kind: Namespace
 metadata:
   annotations:
-    ingress-whitelist: "*.acmecorp.com"
+    ingress-allowlist: "*.acmecorp.com"
   name: staging
 ```
 
@@ -563,8 +561,8 @@ kubectl create -f ingress-ok.yaml -n staging
 The above command will report an error as follows:
 
 ```
-Error from server (BadRequest): error when creating "ingress-ok.yaml": admission webhook 
-"validate.nginx.ingress.kubernetes.io" denied the request: host "signin.acmecorp.com" and 
+Error from server (BadRequest): error when creating "ingress-ok.yaml": admission webhook
+"validate.nginx.ingress.kubernetes.io" denied the request: host "signin.acmecorp.com" and
 path "/" is already defined in ingress production/ingress-ok
 ```
 

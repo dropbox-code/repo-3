@@ -725,12 +725,16 @@ The path separator is used to access values inside object and array documents. I
 #### Query Parameters
 
 - **input** - Provide an input document. Format is a JSON value that will be used as the value for the input document.
-- **pretty** - If parameter is `true`, response will formatted for humans.
+- **pretty** - If parameter is `true`, response will be formatted for humans.
 - **provenance** - If parameter is `true`, response will include build/version info in addition to the result.  See [Provenance](#provenance) for more detail.
-- **explain** - Return query explanation in addition to result. Values: **full**.
+- **explain** - Return query explanation in addition to result. Values: **notes**, **fails**, **full**, **debug**.
 - **metrics** - Return query performance metrics in addition to result. See [Performance Metrics](#performance-metrics) for more detail.
 - **instrument** - Instrument query evaluation and return a superset of performance metrics in addition to result. See [Performance Metrics](#performance-metrics) for more detail.
 - **strict-builtin-errors** - Treat built-in function call errors as fatal and return an error immediately.
+
+#### Request Headers
+
+- **Accept-Encoding: gzip**: Indicates the server should respond with a gzip encoded body. The server will send the compressed response only if its length is above `server.encoding.gzip.min_length` value. See the configuration section
 
 #### Status Codes
 
@@ -738,10 +742,7 @@ The path separator is used to access values inside object and array documents. I
 - **400** - bad request
 - **500** - server error
 
-The server returns 400 if either:
-
-- The query requires the input document and the caller does not provide it.
-- The caller provides the input document but the query already defines it programmatically.
+The server returns 400 if the input document is invalid (i.e. malformed JSON).
 
 The server returns 200 if the path refers to an undefined document. In this
 case, the response will not contain a `result` property.
@@ -818,17 +819,19 @@ Get a document that requires input.
 
 The path separator is used to access values inside object and array documents. If the path indexes into an array, the server will attempt to convert the array index to an integer. If the path element cannot be converted to an integer, the server will respond with 404.
 
-The request body contains an object that specifies a value for [The input Document](../#the-input-document).
+The request body contains an object that specifies a value for [The input Document](../philosophy/#the-opa-document-model).
 
 #### Request Headers
 
 - **Content-Type: application/x-yaml**: Indicates the request body is a YAML encoded object.
+- **Content-Encoding: gzip**: Indicates the request body is a gzip encoded object.
+- **Accept-Encoding: gzip**: Indicates the server should respond with a gzip encoded body. The server will send the compressed response only if its length is above `server.encoding.gzip.min_length` value. See the configuration section
 
 #### Query Parameters
 
 - **pretty** - If parameter is `true`, response will formatted for humans.
 - **provenance** - If parameter is `true`, response will include build/version info in addition to the result.  See [Provenance](#provenance) for more detail.
-- **explain** - Return query explanation in addition to result. Values: **full**.
+- **explain** - Return query explanation in addition to result. Values: **notes**, **fails**, **full**, **debug**.
 - **metrics** - Return query performance metrics in addition to result. See [Performance Metrics](#performance-metrics) for more detail.
 - **instrument** - Instrument query evaluation and return a superset of performance metrics in addition to result. See [Performance Metrics](#performance-metrics) for more detail.
 - **strict-builtin-errors** - Treat built-in function call errors as fatal and return an error immediately.
@@ -839,10 +842,7 @@ The request body contains an object that specifies a value for [The input Docume
 - **400** - bad request
 - **500** - server error
 
-The server returns 400 if either:
-
-1. The query requires an input document and the client did not supply one.
-2. The query already defines an input document and the client did supply one.
+The server returns 400 if the input document is invalid (i.e. malformed JSON).
 
 The server returns 200 if the path refers to an undefined document. In this
 case, the response will not contain a `result` property.
@@ -938,13 +938,15 @@ Use this API if you are enforcing policy decisions via webhooks that have pre-de
 request/response formats. Note, the API path prefix is `/v0` instead of `/v1`.
 
 The request message body defines the content of the [The input
-Document](../#the-input-document). The request message body
+Document](../philosophy/#the-opa-document-model). The request message body
 may be empty. The path separator is used to access values inside object and
 array documents.
 
 #### Request Headers
 
 - **Content-Type: application/x-yaml**: Indicates the request body is a YAML encoded object.
+- **Content-Encoding: gzip**: Indicates the request body is a gzip encoded object.
+- **Accept-Encoding: gzip**: Indicates the server should respond with a gzip encoded body. The server will send the compressed response only if its length is above `server.encoding.gzip.min_length` value. See the configuration section
 
 #### Query Parameters
 
@@ -1007,6 +1009,10 @@ Create or overwrite a document.
 If the path does not refer to an existing document, the server will attempt to create all of the necessary containing documents. This behavior is similar in principle to the Unix command `mkdir -p`.
 
 The server will respect the `If-None-Match` header if it is set to `*`. In this case, the server will not overwrite an existing document located at the path.
+
+#### Query Parameters
+
+- **metrics** - Return performance metrics in addition to result. See [Performance Metrics](#performance-metrics) for more detail.
 
 #### Status Codes
 
@@ -1100,6 +1106,10 @@ Delete a document.
 
 The server processes the DELETE method as if the client had sent a PATCH request containing a single remove operation.
 
+#### Query Parameters
+
+- **metrics** - Return performance metrics in addition to result. See [Performance Metrics](#performance-metrics) for more detail.
+
 #### Status Codes
 
 - **204** - no content (success)
@@ -1157,7 +1167,7 @@ produce a value for the `/data/system/main` document. You can configure OPA
 to use a different URL path to serve these queries. See the [Configuration Reference](../configuration)
 for more information.
 
-The request message body is mapped to the [Input Document](../#the-input-document).
+The request message body is mapped to the [Input Document](../philosophy/#the-opa-document-model).
 
 ```http
 PUT /v1/policies/example1 HTTP/1.1
@@ -1208,7 +1218,7 @@ GET /v1/query
 
 - **q** - The ad-hoc query to execute. OPA will parse, compile, and execute the query represented by the parameter value. The value MUST be URL encoded. Only used in GET method. For POST method the query is sent as part of the request body and this parameter is not used.
 - **pretty** - If parameter is `true`, response will formatted for humans.
-- **explain** - Return query explanation in addition to result. Values: **full**.
+- **explain** - Return query explanation in addition to result. Values: **notes**, **fails**, **full**, **debug**.
 - **metrics** - Return query performance metrics in addition to result. See [Performance Metrics](#performance-metrics) for more detail.
 
 #### Status Codes
@@ -1274,23 +1284,34 @@ Content-Type: application/json
 Partially evaluate a query.
 
 The [Compile API](#compile-api) allows you to partially evaluate Rego queries
-and obtain a simplified version of the policy. For more details on Partial
-Evaluation in OPA, see [this post on blog.openpolicyagent.org](https://blog.openpolicyagent.org/partial-evaluation-162750eaf422).
+and obtain a simplified version of the policy. This is most useful when building
+integrations where policy logic is to be translated and evaluated in another
+environment. For example, 
+[this post](https://blog.openpolicyagent.org/write-policy-in-opa-enforce-policy-in-sql-d9d24db93bf4)
+on the OPA blog shows how SQL can be generated based on Compile API output. 
+For more details on Partial Evaluation in OPA, please refer to
+[this blog post](https://blog.openpolicyagent.org/partial-evaluation-162750eaf422).
 
 #### Request Body
 
 Compile API requests contain the following fields:
 
-| Field | Type | Requried | Description |
+| Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `query` | `string` | Yes | The query to partially evaluate and compile. |
 | `input` | `any` | No | The input document to use during partial evaluation (default: undefined). |
+| `options`  | `object[string, any]`           | No | Additional options to use during partial evaluation. Only `disableInlining` option is supported. (default: undefined). |
 | `unknowns` | `array[string]` | No | The terms to treat as unknown during partial evaluation (default: `["input"]`]). |
+
+### Request Headers
+
+- **Content-Encoding: gzip**: Indicates the request body is a gzip encoded object.
+- **Accept-Encoding: gzip**: Indicates the server should respond with a gzip encoded body. The server will send the compressed response only if its length is above `server.encoding.gzip.min_length` value
 
 #### Query Parameters
 
 - **pretty** - If parameter is `true`, response will formatted for humans.
-- **explain** - Return query explanation in addition to result. Values: **full**.
+- **explain** - Return query explanation in addition to result. Values: **notes**, **fails**, **full**, **debug**.
 - **metrics** - Return query performance metrics in addition to result. See [Performance Metrics](#performance-metrics) for more detail.
 - **instrument** - Instrument query evaluation and return a superset of performance metrics in addition to result. See [Performance Metrics](#performance-metrics) for more detail.
 
@@ -1324,6 +1345,9 @@ Content-Type: application/json
     "subject": {
       "clearance_level": 4
     }
+  },
+  "options": {
+    "disableInlining": []
   },
   "unknowns": [
     "data.reports"
@@ -1523,7 +1547,7 @@ that the server is operational. Optionally it can account for bundle activation 
 #### Query Parameters
 * `bundles` - Boolean parameter to account for bundle activation status in response. This includes any discovery bundles or bundles defined in the loaded discovery configuration.
 * `plugins` - Boolean parameter to account for plugin status in response.
-* `exclude-plugin` - String parameter to exclude a plugin from status checks. Can be added multiple times. Does nothing if `plugins` is not true. This parameter is useful for special use cases where a plugin depends on the server being fully initialized before it can fully intialize itself.
+* `exclude-plugin` - String parameter to exclude a plugin from status checks. Can be added multiple times. Does nothing if `plugins` is not true. This parameter is useful for special use cases where a plugin depends on the server being fully initialized before it can fully initialize itself.
 
 #### Status Codes
 - **200** - OPA service is healthy. If the `bundles` option is specified then all configured bundles have
@@ -1899,14 +1923,18 @@ Explanations can be requested for:
 Explanations are requested by setting the `explain` query parameter to one of
 the following values:
 
+- **off** - do not return any trace.
 - **full** - returns a full query trace containing every step in the query evaluation process.
+- **debug** - returns a full query trace including debug info.
+- **notes** - returns only note events and their context.
+- **fails** - returns only fail events and their context.
 
 By default, explanations are represented in a machine-friendly format. Set the
 `pretty` parameter to request a human-friendly format for debugging purposes.
 
 ### Trace Events
 
-When the `explain` query parameter is set to **full** , the response contains an array of Trace Event objects.
+When the `explain` query parameter is set to anything except `off`, the response contains an array of Trace Event objects.
 
 Trace Event objects contain the following fields:
 
@@ -1996,9 +2024,10 @@ response. To enable performance metric collection on an API call, specify the
 `metrics=true` query parameter when executing the API call. Performance metrics
 are currently supported for the following APIs:
 
-- Data API (GET and POST)
-- Policy API (all methods)
+- Policy API (PUT and DELETE)
+- Data API (GET, POST, PUT, and DELETE)
 - Query API (all methods)
+- Compile API (POST)
 
 For example:
 
@@ -2032,12 +2061,18 @@ Content-Type: application/json
 OPA currently supports the following query performance metrics:
 
 - **timer_rego_input_parse_ns**: time taken (in nanoseconds) to parse the input
-- **timer_rego_query_parse_ns**: time taken (in nanonseconds) to parse the query.
-- **timer_rego_query_compile_ns**: time taken (in nanonseconds) to compile the query.
-- **timer_rego_query_eval_ns**: time taken (in nanonseconds) to evaluate the query.
+- **timer_rego_query_parse_ns**: time taken (in nanoseconds) to parse the query.
+- **timer_rego_query_compile_ns**: time taken (in nanoseconds) to compile the query.
+- **timer_rego_query_eval_ns**: time taken (in nanoseconds) to evaluate the query.
 - **timer_rego_module_parse_ns**: time taken (in nanoseconds) to parse the input policy module.
 - **timer_rego_module_compile_ns**: time taken (in nanoseconds) to compile the loaded policy modules.
 - **timer_server_handler_ns**: time take (in nanoseconds) to handle the API request.
+- **counter_server_query_cache_hit**: number of cache hits for the query.
+
+The `counter_server_query_cache_hit` counter gives an indication about whether OPA creates a new Rego query
+or it uses a pre-processed query which holds some prepared state to serve the API request. A pre-processed query will be
+faster to evaluate since OPA will not have to re-parse or compile it. Hence, when the query is served from the cache
+`timer_rego_query_parse_ns` and `timer_rego_query_compile_ns` timers will be omitted from the reported performance metrics.
 
 OPA also supports query instrumentation. To enable query instrumentation,
 specify the `instrument=true` query parameter when executing the API call.

@@ -75,7 +75,7 @@ func (o DepAnalysisOutput) Pretty(w io.Writer) error {
 		}
 	} else if len(o.Virtual) > 0 {
 		headers = []string{"Virtual Documents"}
-		rows = make([][]string, len(o.Base))
+		rows = make([][]string, len(o.Virtual))
 		for i := range rows {
 			rows[i] = []string{o.Virtual[i].String()}
 		}
@@ -223,7 +223,8 @@ func (e OutputErrors) Error() string {
 		prefix = fmt.Sprintf("%d errors occurred:\n", len(e))
 	}
 
-	var s []string
+	// We preallocate for at least the minimum number of strings.
+	s := make([]string, 0, len(e))
 	for _, err := range e {
 		s = append(s, err.Error())
 		if l, ok := err.Details.(string); ok {
@@ -346,7 +347,7 @@ func Source(w io.Writer, r Output) error {
 
 	for i := range r.Partial.Queries {
 		fmt.Fprintf(w, "# Query %d\n", i+1)
-		bs, err := format.Ast(r.Partial.Queries[i])
+		bs, err := format.AstWithOpts(r.Partial.Queries[i], format.Opts{IgnoreLocations: true})
 		if err != nil {
 			return err
 		}
@@ -355,7 +356,7 @@ func Source(w io.Writer, r Output) error {
 
 	for i := range r.Partial.Support {
 		fmt.Fprintf(w, "# Module %d\n", i+1)
-		bs, err := format.Ast(r.Partial.Support[i])
+		bs, err := format.AstWithOpts(r.Partial.Support[i], format.Opts{IgnoreLocations: true})
 		if err != nil {
 			return err
 		}
@@ -455,10 +456,11 @@ func prettyPartial(w io.Writer, pq *rego.PartialQueries) error {
 	return nil
 }
 
+// prettyASTNode is used for pretty-printing the result of partial eval
 func prettyASTNode(x interface{}) (string, int, error) {
-	bs, err := format.Ast(x)
+	bs, err := format.AstWithOpts(x, format.Opts{IgnoreLocations: true})
 	if err != nil {
-		return "", 0, fmt.Errorf("format error: %v", err)
+		return "", 0, fmt.Errorf("format error: %w", err)
 	}
 	var maxLineWidth int
 	s := strings.Trim(strings.Replace(string(bs), "\t", "  ", -1), "\n")
@@ -494,14 +496,16 @@ func prettyAggregatedMetrics(w io.Writer, ms map[string]interface{}, limit int) 
 
 func prettyProfile(w io.Writer, profile []profiler.ExprStats) error {
 	tableProfile := generateTableProfile(w)
+
 	for _, rs := range profile {
 		line := []string{}
 		timeNs := time.Duration(rs.ExprTimeNs) * time.Nanosecond
 		timeNsStr := timeNs.String()
 		numEval := strconv.FormatInt(int64(rs.NumEval), 10)
 		numRedo := strconv.FormatInt(int64(rs.NumRedo), 10)
+		numGenExpr := strconv.FormatInt(int64(rs.NumGenExpr), 10)
 		loc := rs.Location.String()
-		line = append(line, timeNsStr, numEval, numRedo, loc)
+		line = append(line, timeNsStr, numEval, numRedo, numGenExpr, loc)
 		tableProfile.Append(line)
 	}
 	if tableProfile.NumLines() > 0 {
@@ -511,7 +515,7 @@ func prettyProfile(w io.Writer, profile []profiler.ExprStats) error {
 }
 
 func prettyAggregatedProfile(w io.Writer, profile []profiler.ExprStatsAggregated) error {
-	tableProfile := generateTableWithKeys(w, append(statKeys, "num eval", "num redo", "location")...)
+	tableProfile := generateTableWithKeys(w, append(statKeys, "num eval", "num redo", "num gen expr", "location")...)
 	for _, rs := range profile {
 		line := []string{}
 		for _, k := range statKeys {
@@ -524,8 +528,9 @@ func prettyAggregatedProfile(w io.Writer, profile []profiler.ExprStatsAggregated
 		}
 		numEval := strconv.FormatInt(int64(rs.NumEval), 10)
 		numRedo := strconv.FormatInt(int64(rs.NumRedo), 10)
+		numGenExpr := strconv.FormatInt(int64(rs.NumGenExpr), 10)
 		loc := rs.Location.String()
-		line = append(line, numEval, numRedo, loc)
+		line = append(line, numEval, numRedo, numGenExpr, loc)
 		tableProfile.Append(line)
 	}
 	if tableProfile.NumLines() > 0 {
@@ -596,10 +601,10 @@ func generateTableMetrics(writer io.Writer) *tablewriter.Table {
 
 func generateTableWithKeys(writer io.Writer, keys ...string) *tablewriter.Table {
 	table := tablewriter.NewWriter(writer)
-	aligns := []int{}
-	var hdrs []string
+	aligns := make([]int, 0, len(keys))
+	hdrs := make([]string, 0, len(keys))
 	for _, k := range keys {
-		hdrs = append(hdrs, strings.Title((k)))
+		hdrs = append(hdrs, strings.Title(k)) //nolint:staticcheck // SA1019, no unicode here
 		aligns = append(aligns, tablewriter.ALIGN_LEFT)
 	}
 	table.SetHeader(hdrs)
@@ -609,7 +614,7 @@ func generateTableWithKeys(writer io.Writer, keys ...string) *tablewriter.Table 
 }
 
 func generateTableProfile(writer io.Writer) *tablewriter.Table {
-	return generateTableWithKeys(writer, "Time", "Num Eval", "Num Redo", "Location")
+	return generateTableWithKeys(writer, "Time", "Num Eval", "Num Redo", "Num Gen Expr", "Location")
 }
 
 func populateTableMetrics(m metrics.Metrics, table *tablewriter.Table, prettyLimit int) {

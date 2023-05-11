@@ -7,15 +7,15 @@ import (
 	"sort"
 	"time"
 
-	"github.com/open-policy-agent/opa/resolver"
-	"github.com/open-policy-agent/opa/topdown/cache"
-	"github.com/open-policy-agent/opa/topdown/print"
-
 	"github.com/open-policy-agent/opa/ast"
 	"github.com/open-policy-agent/opa/metrics"
+	"github.com/open-policy-agent/opa/resolver"
 	"github.com/open-policy-agent/opa/storage"
 	"github.com/open-policy-agent/opa/topdown/builtins"
+	"github.com/open-policy-agent/opa/topdown/cache"
 	"github.com/open-policy-agent/opa/topdown/copypropagation"
+	"github.com/open-policy-agent/opa/topdown/print"
+	"github.com/open-policy-agent/opa/tracing"
 )
 
 // QueryResultSet represents a collection of results returned by a query.
@@ -52,8 +52,12 @@ type Query struct {
 	indexing               bool
 	earlyExit              bool
 	interQueryBuiltinCache cache.InterQueryCache
+	ndBuiltinCache         builtins.NDBCache
 	strictBuiltinErrors    bool
+	builtinErrorList       *[]Error
+	strictObjects          bool
 	printHook              print.Hook
+	tracingOpts            tracing.Options
 }
 
 // Builtin represents a built-in function that queries can call.
@@ -241,9 +245,23 @@ func (q *Query) WithInterQueryBuiltinCache(c cache.InterQueryCache) *Query {
 	return q
 }
 
+// WithNDBuiltinCache sets the non-deterministic builtin cache.
+func (q *Query) WithNDBuiltinCache(c builtins.NDBCache) *Query {
+	q.ndBuiltinCache = c
+	return q
+}
+
 // WithStrictBuiltinErrors tells the evaluator to treat all built-in function errors as fatal errors.
 func (q *Query) WithStrictBuiltinErrors(yes bool) *Query {
 	q.strictBuiltinErrors = yes
+	return q
+}
+
+// WithBuiltinErrorList supplies a pointer to an Error slice to store built-in function errors
+// encountered during evaluation. This error slice can be inspected after evaluation to determine
+// which built-in function errors occurred.
+func (q *Query) WithBuiltinErrorList(list *[]Error) *Query {
+	q.builtinErrorList = list
 	return q
 }
 
@@ -255,6 +273,21 @@ func (q *Query) WithResolver(ref ast.Ref, r resolver.Resolver) *Query {
 
 func (q *Query) WithPrintHook(h print.Hook) *Query {
 	q.printHook = h
+	return q
+}
+
+// WithDistributedTracingOpts sets the options to be used by distributed tracing.
+func (q *Query) WithDistributedTracingOpts(tr tracing.Options) *Query {
+	q.tracingOpts = tr
+	return q
+}
+
+// WithStrictObjects tells the evaluator to avoid the "lazy object" optimization
+// applied when reading objects from the store. It will result in higher memory
+// usage and should only be used temporarily while adjusting code that breaks
+// because of the optimization.
+func (q *Query) WithStrictObjects(yes bool) *Query {
+	q.strictObjects = yes
 	return q
 }
 
@@ -304,7 +337,9 @@ func (q *Query) PartialRun(ctx context.Context) (partials []ast.Body, support []
 		instr:                  q.instr,
 		builtins:               q.builtins,
 		builtinCache:           builtins.Cache{},
+		functionMocks:          newFunctionMocksStack(),
 		interQueryBuiltinCache: q.interQueryBuiltinCache,
+		ndBuiltinCache:         q.ndBuiltinCache,
 		virtualCache:           newVirtualCache(),
 		comprehensionCache:     newComprehensionCache(),
 		saveSet:                newSaveSet(q.unknowns, b, q.instr),
@@ -321,6 +356,7 @@ func (q *Query) PartialRun(ctx context.Context) (partials []ast.Body, support []
 		earlyExit:     q.earlyExit,
 		builtinErrors: &builtinErrors{},
 		printHook:     q.printHook,
+		strictObjects: q.strictObjects,
 	}
 
 	if len(q.disableInlining) > 0 {
@@ -332,6 +368,14 @@ func (q *Query) PartialRun(ctx context.Context) (partials []ast.Body, support []
 	defer q.metrics.Timer(metrics.RegoPartialEval).Stop()
 
 	livevars := ast.NewVarSet()
+	for _, t := range q.unknowns {
+		switch v := t.Value.(type) {
+		case ast.Var:
+			livevars.Add(v)
+		case ast.Ref:
+			livevars.Add(v[0].Value.(ast.Var))
+		}
+	}
 
 	ast.WalkVars(q.query, func(x ast.Var) bool {
 		if !x.IsGenerated() {
@@ -384,8 +428,25 @@ func (q *Query) PartialRun(ctx context.Context) (partials []ast.Body, support []
 
 	support = e.saveSupport.List()
 
-	if q.strictBuiltinErrors && len(e.builtinErrors.errs) > 0 {
-		err = e.builtinErrors.errs[0]
+	if len(e.builtinErrors.errs) > 0 {
+		if q.strictBuiltinErrors {
+			err = e.builtinErrors.errs[0]
+		} else if q.builtinErrorList != nil {
+			// If a builtinErrorList has been supplied, we must use pointer indirection
+			// to append to it. builtinErrorList is a slice pointer so that errors can be
+			// appended to it without returning a new slice and changing the interface
+			// of PartialRun.
+			for _, err := range e.builtinErrors.errs {
+				if tdError, ok := err.(*Error); ok {
+					*(q.builtinErrorList) = append(*(q.builtinErrorList), *tdError)
+				} else {
+					*(q.builtinErrorList) = append(*(q.builtinErrorList), Error{
+						Code:    BuiltinErr,
+						Message: err.Error(),
+					})
+				}
+			}
+		}
 	}
 
 	for i := range support {
@@ -444,7 +505,9 @@ func (q *Query) Iter(ctx context.Context, iter func(QueryResult) error) error {
 		instr:                  q.instr,
 		builtins:               q.builtins,
 		builtinCache:           builtins.Cache{},
+		functionMocks:          newFunctionMocksStack(),
 		interQueryBuiltinCache: q.interQueryBuiltinCache,
+		ndBuiltinCache:         q.ndBuiltinCache,
 		virtualCache:           newVirtualCache(),
 		comprehensionCache:     newComprehensionCache(),
 		genvarprefix:           q.genvarprefix,
@@ -453,6 +516,8 @@ func (q *Query) Iter(ctx context.Context, iter func(QueryResult) error) error {
 		earlyExit:              q.earlyExit,
 		builtinErrors:          &builtinErrors{},
 		printHook:              q.printHook,
+		tracingOpts:            q.tracingOpts,
+		strictObjects:          q.strictObjects,
 	}
 	e.caller = e
 	q.metrics.Timer(metrics.RegoQueryEval).Start()
@@ -465,8 +530,25 @@ func (q *Query) Iter(ctx context.Context, iter func(QueryResult) error) error {
 		return iter(qr)
 	})
 
-	if q.strictBuiltinErrors && err == nil && len(e.builtinErrors.errs) > 0 {
-		err = e.builtinErrors.errs[0]
+	if len(e.builtinErrors.errs) > 0 {
+		if q.strictBuiltinErrors {
+			err = e.builtinErrors.errs[0]
+		} else if q.builtinErrorList != nil {
+			// If a builtinErrorList has been supplied, we must use pointer indirection
+			// to append to it. builtinErrorList is a slice pointer so that errors can be
+			// appended to it without returning a new slice and changing the interface
+			// of Iter.
+			for _, err := range e.builtinErrors.errs {
+				if tdError, ok := err.(*Error); ok {
+					*(q.builtinErrorList) = append(*(q.builtinErrorList), *tdError)
+				} else {
+					*(q.builtinErrorList) = append(*(q.builtinErrorList), Error{
+						Code:    BuiltinErr,
+						Message: err.Error(),
+					})
+				}
+			}
+		}
 	}
 
 	q.metrics.Timer(metrics.RegoQueryEval).Stop()

@@ -11,6 +11,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel/sdk/trace"
+
 	"github.com/gorilla/mux"
 	"github.com/open-policy-agent/opa/ast"
 	"github.com/open-policy-agent/opa/bundle"
@@ -36,11 +39,11 @@ import (
 // configuration blob. If your plugin has not been configured, your
 // factory will not be invoked.
 //
-//   plugins:
-//     my_plugin1:
-//       some_key: foo
-//     # my_plugin2:
-//     #   some_key2: bar
+//	plugins:
+//	  my_plugin1:
+//	    some_key: foo
+//	  # my_plugin2:
+//	  #   some_key2: bar
 //
 // If OPA was started with the configuration above and received two
 // calls to runtime.RegisterPlugins (one with NAME "my_plugin1" and
@@ -169,7 +172,7 @@ type Manager struct {
 	services                     map[string]rest.Client
 	keys                         map[string]*keys.Config
 	plugins                      []namedplugin
-	registeredTriggers           []func(txn storage.Transaction)
+	registeredTriggers           []func(storage.Transaction)
 	mtx                          sync.Mutex
 	pluginStatus                 map[string]*Status
 	pluginStatusListeners        map[string]StatusListener
@@ -187,6 +190,10 @@ type Manager struct {
 	printHook                    print.Hook
 	enablePrintStatements        bool
 	router                       *mux.Router
+	prometheusRegister           prometheus.Registerer
+	tracerProvider               *trace.TracerProvider
+	registeredNDCacheTriggers    []func(bool)
+	bootstrapConfigLabels        map[string]string
 }
 
 type managerContextKey string
@@ -344,6 +351,20 @@ func WithRouter(r *mux.Router) func(*Manager) {
 	}
 }
 
+// WithPrometheusRegister sets the passed prometheus.Registerer to be used by plugins
+func WithPrometheusRegister(prometheusRegister prometheus.Registerer) func(*Manager) {
+	return func(m *Manager) {
+		m.prometheusRegister = prometheusRegister
+	}
+}
+
+// WithTracerProvider sets the passed *trace.TracerProvider to be used by plugins
+func WithTracerProvider(tracerProvider *trace.TracerProvider) func(*Manager) {
+	return func(m *Manager) {
+		m.tracerProvider = tracerProvider
+	}
+}
+
 // New creates a new Manager using config.
 func New(raw []byte, id string, store storage.Store, opts ...func(*Manager)) (*Manager, error) {
 
@@ -372,6 +393,7 @@ func New(raw []byte, id string, store storage.Store, opts ...func(*Manager)) (*M
 		maxErrors:                    -1,
 		interQueryBuiltinCacheConfig: interQueryBuiltinCacheConfig,
 		serverInitialized:            make(chan struct{}),
+		bootstrapConfigLabels:        parsedConfig.Labels,
 	}
 
 	for _, f := range opts {
@@ -536,7 +558,7 @@ func (m *Manager) GetRouter() *mux.Router {
 
 // RegisterCompilerTrigger registers for change notifications when the compiler
 // is changed.
-func (m *Manager) RegisterCompilerTrigger(f func(txn storage.Transaction)) {
+func (m *Manager) RegisterCompilerTrigger(f func(storage.Transaction)) {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
 	m.registeredTriggers = append(m.registeredTriggers, f)
@@ -588,8 +610,11 @@ func (m *Manager) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop stops the manager, stopping all the plugins registered with it. Any plugin that needs to perform cleanup should
-// do so within the duration of the graceful shutdown period passed with the context as a timeout.
+// Stop stops the manager, stopping all the plugins registered with it.
+// Any plugin that needs to perform cleanup should do so within the duration
+// of the graceful shutdown period passed with the context as a timeout.
+// Note that a graceful shutdown period configured with the Manager instance
+// will override the timeout of the passed in context (if applicable).
 func (m *Manager) Stop(ctx context.Context) {
 	var toStop []Plugin
 
@@ -602,10 +627,20 @@ func (m *Manager) Stop(ctx context.Context) {
 		}
 	}()
 
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(m.gracefulShutdownPeriod)*time.Second)
+	var cancel context.CancelFunc
+	if m.gracefulShutdownPeriod > 0 {
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(m.gracefulShutdownPeriod)*time.Second)
+	} else {
+		ctx, cancel = context.WithCancel(ctx)
+	}
 	defer cancel()
 	for i := range toStop {
 		toStop[i].Stop(ctx)
+	}
+	if c, ok := m.Store.(interface{ Close(context.Context) error }); ok {
+		if err := c.Close(ctx); err != nil {
+			m.logger.Error("Error closing store: %v", err)
+		}
 	}
 }
 
@@ -635,7 +670,16 @@ func (m *Manager) Reconfigure(config *config.Config) error {
 
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
-	config.Labels = m.Config.Labels // don't overwrite labels
+
+	// don't overwrite existing labels, only allow additions - always based on the boostrap config
+	if config.Labels == nil {
+		config.Labels = m.bootstrapConfigLabels
+	} else {
+		for label, value := range m.bootstrapConfigLabels {
+			config.Labels[label] = value
+		}
+	}
+
 	m.Config = config
 	m.interQueryBuiltinCacheConfig = interQueryBuiltinCacheConfig
 	for name, client := range services {
@@ -648,6 +692,10 @@ func (m *Manager) Reconfigure(config *config.Config) error {
 
 	for _, trigger := range m.registeredCacheTriggers {
 		trigger(interQueryBuiltinCacheConfig)
+	}
+
+	for _, trigger := range m.registeredNDCacheTriggers {
+		trigger(config.NDBuiltinCache)
 	}
 
 	return nil
@@ -799,10 +847,6 @@ func (m *Manager) updateWasmResolversData(ctx context.Context, event storage.Tri
 	m.wasmResolversMtx.Lock()
 	defer m.wasmResolversMtx.Unlock()
 
-	if len(m.wasmResolvers) == 0 {
-		return nil
-	}
-
 	for _, resolver := range m.wasmResolvers {
 		for _, dataEvent := range event.Data {
 			var err error
@@ -884,4 +928,20 @@ func (m *Manager) RegisterCacheTrigger(trigger func(*cache.Config)) {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
 	m.registeredCacheTriggers = append(m.registeredCacheTriggers, trigger)
+}
+
+// PrometheusRegister gets the prometheus.Registerer for this plugin manager.
+func (m *Manager) PrometheusRegister() prometheus.Registerer {
+	return m.prometheusRegister
+}
+
+// TracerProvider gets the *trace.TracerProvider for this plugin manager.
+func (m *Manager) TracerProvider() *trace.TracerProvider {
+	return m.tracerProvider
+}
+
+func (m *Manager) RegisterNDCacheTrigger(trigger func(bool)) {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+	m.registeredNDCacheTriggers = append(m.registeredNDCacheTriggers, trigger)
 }

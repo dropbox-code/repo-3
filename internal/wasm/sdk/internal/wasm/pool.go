@@ -9,7 +9,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/bytecodealliance/wasmtime-go"
+	wasmtime "github.com/bytecodealliance/wasmtime-go/v3"
 
 	"github.com/open-policy-agent/opa/internal/wasm/sdk/opa/errors"
 	"github.com/open-policy-agent/opa/internal/wasm/util"
@@ -41,7 +41,7 @@ type Pool struct {
 func NewPool(poolSize, memoryMinPages, memoryMaxPages uint32) *Pool {
 
 	cfg := wasmtime.NewConfig()
-	cfg.SetInterruptable(true)
+	cfg.SetEpochInterruption(true)
 
 	available := make(chan struct{}, poolSize)
 	for i := uint32(0); i < poolSize; i++ {

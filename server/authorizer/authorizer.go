@@ -7,7 +7,7 @@ package authorizer
 
 import (
 	"context"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -18,6 +18,7 @@ import (
 	"github.com/open-policy-agent/opa/server/types"
 	"github.com/open-policy-agent/opa/server/writer"
 	"github.com/open-policy-agent/opa/storage"
+	"github.com/open-policy-agent/opa/topdown/cache"
 	"github.com/open-policy-agent/opa/topdown/print"
 	"github.com/open-policy-agent/opa/util"
 )
@@ -31,6 +32,7 @@ type Basic struct {
 	decision              func() ast.Ref
 	printHook             print.Hook
 	enablePrintStatements bool
+	interQueryCache       cache.InterQueryCache
 }
 
 // Runtime returns an argument that sets the runtime on the authorizer.
@@ -62,6 +64,13 @@ func PrintHook(printHook print.Hook) func(*Basic) {
 func EnablePrintStatements(yes bool) func(r *Basic) {
 	return func(b *Basic) {
 		b.enablePrintStatements = yes
+	}
+}
+
+// InterQueryCache enables the inter-query cache on the authorizer
+func InterQueryCache(interQueryCache cache.InterQueryCache) func(*Basic) {
+	return func(b *Basic) {
+		b.interQueryCache = interQueryCache
 	}
 }
 
@@ -98,6 +107,7 @@ func (h *Basic) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		rego.Runtime(h.runtime),
 		rego.EnablePrintStatements(h.enablePrintStatements),
 		rego.PrintHook(h.printHook),
+		rego.InterQueryBuiltinCache(h.interQueryCache),
 	)
 
 	rs, err := rego.Eval(r.Context())
@@ -188,6 +198,11 @@ func makeInput(r *http.Request) (*http.Request, interface{}, error) {
 		input["identity"] = identity
 	}
 
+	clientCertificates, ok := identifier.ClientCertificates(r)
+	if ok {
+		input["client_certificates"] = clientCertificates
+	}
+
 	return r, input, nil
 }
 
@@ -219,7 +234,7 @@ func expectYAML(r *http.Request) bool {
 
 func readBody(r *http.Request) ([]byte, error) {
 
-	bs, err := ioutil.ReadAll(r.Body)
+	bs, err := io.ReadAll(r.Body)
 
 	if err != nil {
 		return nil, err

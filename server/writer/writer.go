@@ -25,32 +25,20 @@ func HTTPStatus(code int) http.HandlerFunc {
 // ErrorAuto writes a response with status and code set automatically based on
 // the type of err.
 func ErrorAuto(w http.ResponseWriter, err error) {
-	if types.IsBadRequest(err) {
+	switch {
+	case types.IsBadRequest(err):
 		ErrorString(w, http.StatusBadRequest, types.CodeInvalidParameter, err)
-		return
-	}
-
-	if storage.IsWriteConflictError(err) {
+	case storage.IsWriteConflictError(err):
 		ErrorString(w, http.StatusNotFound, types.CodeResourceConflict, err)
-		return
-	}
-
-	if topdown.IsError(err) {
+	case topdown.IsError(err):
 		Error(w, http.StatusInternalServerError, types.NewErrorV1(types.CodeInternal, types.MsgEvaluationError).WithError(err))
-		return
-	}
-
-	if storage.IsInvalidPatch(err) {
+	case storage.IsInvalidPatch(err):
 		ErrorString(w, http.StatusBadRequest, types.CodeInvalidParameter, err)
-		return
-	}
-
-	if storage.IsNotFound(err) {
+	case storage.IsNotFound(err):
 		ErrorString(w, http.StatusNotFound, types.CodeResourceNotFound, err)
-		return
+	default:
+		ErrorString(w, http.StatusInternalServerError, types.CodeInternal, err)
 	}
-
-	ErrorString(w, http.StatusInternalServerError, types.CodeInternal, err)
 }
 
 // ErrorString writes a response with specified status, code, and message set to
@@ -70,26 +58,17 @@ func Error(w http.ResponseWriter, status int, err *types.ErrorV1) {
 // JSON writes a response with the specified status code and object. The object
 // will be JSON serialized.
 func JSON(w http.ResponseWriter, code int, v interface{}, pretty bool) {
-
-	var bs []byte
-	var err error
-
+	enc := json.NewEncoder(w)
 	if pretty {
-		bs, err = json.MarshalIndent(v, "", "  ")
-	} else {
-		bs, err = json.Marshal(v)
+		enc.SetIndent("", "  ")
 	}
 
-	if err != nil {
+	w.Header().Add("Content-Type", "application/json")
+	w.WriteHeader(code)
+
+	if err := enc.Encode(v); err != nil {
 		ErrorAuto(w, err)
 		return
-	}
-	headers := w.Header()
-	headers.Add("Content-Type", "application/json")
-	Bytes(w, code, bs)
-
-	if pretty {
-		_, _ = w.Write([]byte("\n"))
 	}
 }
 

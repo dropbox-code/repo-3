@@ -2,6 +2,7 @@
 // Use of this source code is governed by an Apache2
 // license that can be found in the LICENSE file.
 
+//go:build opa_wasm
 // +build opa_wasm
 
 package authz
@@ -11,7 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
-	"io/ioutil"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -36,7 +37,8 @@ func TestMain(m *testing.M) {
 	flag.Parse()
 
 	testServerParams := e2e.NewAPIServerTestParams()
-
+	var cleanup func() error
+	testServerParams.DiskStorage, cleanup = diskStorage()
 	var err error
 	testRuntime, err = e2e.NewTestRuntime(testServerParams)
 	if err != nil {
@@ -93,6 +95,11 @@ func TestMain(m *testing.M) {
 	}
 
 	errc := testRuntime.RunTests(m)
+	if errc == 0 && cleanup != nil {
+		if err := cleanup(); err != nil {
+			panic(err)
+		}
+	}
 	os.Exit(errc)
 }
 
@@ -112,11 +119,11 @@ func BenchmarkRESTAuthzAllow10Paths(b *testing.B) {
 	runAuthzBenchmark(b, testAuthz.Allow, 10)
 }
 
-func BenchmarkRESTAuthzAllow100Paths(b *testing.B) {
-	runAuthzBenchmark(b, testAuthz.Allow, 100)
-}
-
 // TODO: Re-enable when performance issues have been addressed.
+//func BenchmarkRESTAuthzAllow100Paths(b *testing.B) {
+//	runAuthzBenchmark(b, testAuthz.Allow, 100)
+//}
+
 // func BenchmarkRESTAuthzAllow1000Paths(b *testing.B) {
 // 	runAuthzBenchmark(b, testAuthz.Allow, 1000)
 // }
@@ -157,7 +164,7 @@ func runAuthzBenchmark(b *testing.B, mode testAuthz.InputMode, numPaths int) {
 		}
 		b.StopTimer()
 
-		body, err := ioutil.ReadAll(resp)
+		body, err := io.ReadAll(resp)
 		if err != nil {
 			b.Fatalf("unexpected error reading response body: %s", err)
 		}

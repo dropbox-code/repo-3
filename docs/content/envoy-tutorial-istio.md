@@ -39,56 +39,56 @@ The `quick_start.yaml` manifest defines the following resources:
 
 * OPA configuration file and an OPA policy into ConfigMaps in the namespace where the app will be deployed, e.g., `default`.
   The following is the example OPA policy:
-        
+
     * alice is granted a **guest** role and can perform a `GET` request to `/productpage`.
     * bob is granted an **admin** role and can perform a `GET` to `/productpage` and `/api/v1/products`.
 
     ```live:example:module:openable
     package istio.authz
-  
+    
+    import future.keywords
+    
     import input.attributes.request.http as http_request
     import input.parsed_path
     
-    default allow = false
+    default allow := false
     
-    allow {
-        parsed_path[0] == "health"
-        http_request.method == "GET"
+    allow if {
+    	parsed_path[0] == "health"
+    	http_request.method == "GET"
     }
     
-    allow {
-        roles_for_user[r]
-        required_roles[r]
+    allow if {
+    	some r in roles_for_user
+    	r in required_roles
     }
     
-    roles_for_user[r] {
-        r := user_roles[user_name][_]
+    roles_for_user contains r if {
+    	some r in user_roles[user_name]
     }
     
-    required_roles[r] {
-        perm := role_perms[r][_]
-        perm.method == http_request.method
-        perm.path == http_request.path
+    required_roles contains r if {
+    	some perm in role_perms[r]
+    	perm.method == http_request.method
+    	perm.path == http_request.path
     }
     
-    user_name = parsed {
-        [_, encoded] := split(http_request.headers.authorization, " ")
-        [parsed, _] := split(base64url.decode(encoded), ":")
+    user_name := parsed if {
+    	[_, encoded] := split(http_request.headers.authorization, " ")
+    	[parsed, _] := split(base64url.decode(encoded), ":")
     }
     
     user_roles := {
-        "alice": ["guest"],
-        "bob": ["admin"]
+    	"alice": ["guest"],
+    	"bob": ["admin"],
     }
     
     role_perms := {
-        "guest": [
-            {"method": "GET",  "path": "/productpage"},
-        ],
-        "admin": [
-            {"method": "GET",  "path": "/productpage"},
-            {"method": "GET",  "path": "/api/v1/products"},
-        ],
+    	"guest": [{"method": "GET", "path": "/productpage"}],
+    	"admin": [
+    		{"method": "GET", "path": "/productpage"},
+    		{"method": "GET", "path": "/api/v1/products"},
+    	],
     }
     ```
 
@@ -99,7 +99,7 @@ The `quick_start.yaml` manifest defines the following resources:
     ```live:example:query:hidden
     data.istio.authz.allow
     ```
-  
+
     ```live:example:input
     {
         "attributes": {
@@ -117,7 +117,7 @@ The `quick_start.yaml` manifest defines the following resources:
     ```
 
     With the input value above, the answer is:
-    
+
     ```live:example:output
     ```
 
@@ -127,7 +127,7 @@ The `quick_start.yaml` manifest defines the following resources:
     > image or it would fetched dynamically via the [Bundle
     > API](https://www.openpolicyagent.org/docs/latest/bundles/). ConfigMaps are
     > used in this tutorial for test purposes.
-  
+
 ### 2. Enable automatic injection of the Istio Proxy and OPA-Envoy sidecars in the namespace where the app will be deployed, e.g., `default`
 
 ```bash
@@ -145,21 +145,27 @@ kubectl apply -f https://raw.githubusercontent.com/istio/istio/master/samples/bo
 kubectl apply -f https://raw.githubusercontent.com/istio/istio/master/samples/bookinfo/networking/bookinfo-gateway.yaml
 ```
 
-### 4. Set the `GATEWAY_URL` environment variable in your shell to the public IP/port of the Istio Ingress gateway
+### 4. Set the `SERVICE_HOST` environment variable in your shell to the public IP/port of the Istio Ingress gateway
 
-**minikube**:
+Run this command in a new terminal window to start a Minikube tunnel that sends traffic to your Istio Ingress Gateway:
+
+```
+minikube tunnel
+```
+
+Check that the Service shows an `EXTERNAL-IP`:
 
 ```bash
-export INGRESS_PORT=$(kubectl -n istio-system get service istio-ingressgateway -o jsonpath='{.spec.ports[?(@.name=="http2")].nodePort}')
-export INGRESS_HOST=$(minikube ip)
-export GATEWAY_URL=$INGRESS_HOST:$INGRESS_PORT
-echo $GATEWAY_URL
+kubectl -n istio-system get service istio-ingressgateway
+
+NAME                   TYPE           CLUSTER-IP     EXTERNAL-IP   PORT(S)                                                                      AGE
+istio-ingressgateway   LoadBalancer   10.98.42.178   127.0.0.1     15021:32290/TCP,80:30283/TCP,443:32497/TCP,31400:30216/TCP,15443:30690/TCP   5s
 ```
 
-**minikube (example)**:
+**minikube:**
 
-```
-192.168.99.100:31380
+```bash
+export SERVICE_HOST=$(kubectl -n istio-system get service istio-ingressgateway -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
 ```
 
 For other platforms see the [Istio documentation on determining ingress IP and ports.](https://istio.io/docs/tasks/traffic-management/ingress/#determining-the-ingress-ip-and-ports)
@@ -170,15 +176,15 @@ For other platforms see the [Istio documentation on determining ingress IP and p
 Check that **alice** can access `/productpage` **BUT NOT** `/api/v1/products`.
 
 ```bash
-curl --user alice:password -i http://$GATEWAY_URL/productpage
-curl --user alice:password -i http://$GATEWAY_URL/api/v1/products
+curl --user alice:password -i http://$SERVICE_HOST/productpage
+curl --user alice:password -i http://$SERVICE_HOST/api/v1/products
 ```
 
 Check that **bob** can access `/productpage` **AND** `/api/v1/products`.
 
 ```bash
-curl --user bob:password -i http://$GATEWAY_URL/productpage
-curl --user bob:password -i http://$GATEWAY_URL/api/v1/products
+curl --user bob:password -i http://$SERVICE_HOST/productpage
+curl --user bob:password -i http://$SERVICE_HOST/api/v1/products
 ```
 
 ## Wrap Up

@@ -8,7 +8,6 @@ package config
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"regexp"
 	"strings"
@@ -25,7 +24,7 @@ import (
 // ServiceOptions stores the options passed to ParseServicesConfig
 type ServiceOptions struct {
 	Raw        json.RawMessage
-	AuthPlugin func(string) rest.HTTPAuthPlugin
+	AuthPlugin rest.AuthPluginLookupFunc
 	Keys       map[string]*keys.Config
 	Logger     logging.Logger
 }
@@ -75,7 +74,7 @@ func Load(configFile string, overrides []string, overrideFiles []string) ([]byte
 	if configFile != "" {
 		var bytes []byte
 		var err error
-		bytes, err = ioutil.ReadFile(configFile)
+		bytes, err = os.ReadFile(configFile)
 		if err != nil {
 			return nil, err
 		}
@@ -83,7 +82,7 @@ func Load(configFile string, overrides []string, overrideFiles []string) ([]byte
 		processedConf := subEnvVars(string(bytes))
 
 		if err := yaml.Unmarshal([]byte(processedConf), &baseConf); err != nil {
-			return []byte{}, fmt.Errorf("failed to parse %s: %s", configFile, err)
+			return nil, fmt.Errorf("failed to parse %s: %s", configFile, err)
 		}
 	}
 
@@ -93,19 +92,19 @@ func Load(configFile string, overrides []string, overrideFiles []string) ([]byte
 	for _, override := range overrides {
 		processedOverride := subEnvVars(override)
 		if err := strvals.ParseInto(processedOverride, overrideConf); err != nil {
-			return []byte{}, fmt.Errorf("failed parsing --set data: %s", err)
+			return nil, fmt.Errorf("failed parsing --set data: %s", err)
 		}
 	}
 
 	// User specified a config override value via --set-file
 	for _, override := range overrideFiles {
 		reader := func(rs []rune) (interface{}, error) {
-			bytes, err := ioutil.ReadFile(string(rs))
+			bytes, err := os.ReadFile(string(rs))
 			value := strings.TrimSpace(string(bytes))
 			return value, err
 		}
 		if err := strvals.ParseIntoFile(override, overrideConf, reader); err != nil {
-			return []byte{}, fmt.Errorf("failed parsing --set-file data: %s", err)
+			return nil, fmt.Errorf("failed parsing --set-file data: %s", err)
 		}
 	}
 

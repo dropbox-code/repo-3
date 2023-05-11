@@ -12,17 +12,22 @@ package ast
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"strings"
 	"unicode"
-
-	"github.com/pkg/errors"
 )
 
 // MustParseBody returns a parsed body.
 // If an error occurs during parsing, panic.
 func MustParseBody(input string) Body {
-	parsed, err := ParseBody(input)
+	return MustParseBodyWithOpts(input, ParserOptions{})
+}
+
+// MustParseBodyWithOpts returns a parsed body.
+// If an error occurs during parsing, panic.
+func MustParseBodyWithOpts(input string, opts ParserOptions) Body {
+	parsed, err := ParseBodyWithOpts(input, opts)
 	if err != nil {
 		panic(err)
 	}
@@ -52,7 +57,13 @@ func MustParseImports(input string) []*Import {
 // MustParseModule returns a parsed module.
 // If an error occurs during parsing, panic.
 func MustParseModule(input string) *Module {
-	parsed, err := ParseModule("", input)
+	return MustParseModuleWithOpts(input, ParserOptions{})
+}
+
+// MustParseModuleWithOpts returns a parsed module.
+// If an error occurs during parsing, panic.
+func MustParseModuleWithOpts(input string, opts ParserOptions) *Module {
+	parsed, err := ParseModuleWithOpts("", input, opts)
 	if err != nil {
 		panic(err)
 	}
@@ -143,12 +154,15 @@ func ParseRuleFromExpr(module *Module, expr *Expr) (*Rule, error) {
 	}
 
 	if _, ok := expr.Terms.(*SomeDecl); ok {
-		return nil, errors.New("some declarations cannot be used for rule head")
+		return nil, errors.New("'some' declarations cannot be used for rule head")
 	}
 
 	if term, ok := expr.Terms.(*Term); ok {
 		switch v := term.Value.(type) {
 		case Ref:
+			if len(v) > 2 { // 2+ dots
+				return ParseCompleteDocRuleWithDotsFromTerm(module, term)
+			}
 			return ParsePartialSetDocRuleFromTerm(module, term)
 		default:
 			return nil, fmt.Errorf("%v cannot be used for rule name", TypeName(v))
@@ -161,30 +175,15 @@ func ParseRuleFromExpr(module *Module, expr *Expr) (*Rule, error) {
 		return nil, errors.New("expression cannot be used for rule head")
 	}
 
-	if expr.IsAssignment() {
-
-		lhs, rhs := expr.Operand(0), expr.Operand(1)
-		if lhs == nil || rhs == nil {
-			return nil, errors.New("assignment requires two operands")
-		}
-
-		rule, err := ParseCompleteDocRuleFromAssignmentExpr(module, lhs, rhs)
-
-		if err == nil {
-			rule.Location = expr.Location
-			rule.Head.Location = expr.Location
-			return rule, nil
-		} else if _, ok := lhs.Value.(Call); ok {
-			return nil, errFunctionAssignOperator
-		} else if _, ok := lhs.Value.(Ref); ok {
-			return nil, errPartialRuleAssignOperator
-		}
-
-		return nil, errTermAssignOperator(lhs.Value)
-	}
-
 	if expr.IsEquality() {
 		return parseCompleteRuleFromEq(module, expr)
+	} else if expr.IsAssignment() {
+		rule, err := parseCompleteRuleFromEq(module, expr)
+		if err != nil {
+			return nil, err
+		}
+		rule.Head.Assign = true
+		return rule, nil
 	}
 
 	if _, ok := BuiltinMap[expr.Operator().String()]; ok {
@@ -211,18 +210,17 @@ func parseCompleteRuleFromEq(module *Module, expr *Expr) (rule *Rule, err error)
 		return nil, errors.New("assignment requires two operands")
 	}
 
-	rule, err = ParseCompleteDocRuleFromEqExpr(module, lhs, rhs)
-
-	if err == nil {
-		return rule, nil
-	}
-
 	rule, err = ParseRuleFromCallEqExpr(module, lhs, rhs)
 	if err == nil {
 		return rule, nil
 	}
 
-	return ParsePartialObjectDocRuleFromEqExpr(module, lhs, rhs)
+	rule, err = ParsePartialObjectDocRuleFromEqExpr(module, lhs, rhs)
+	if err == nil {
+		return rule, nil
+	}
+
+	return ParseCompleteDocRuleFromEqExpr(module, lhs, rhs)
 }
 
 // ParseCompleteDocRuleFromAssignmentExpr returns a rule if the expression can
@@ -243,61 +241,92 @@ func ParseCompleteDocRuleFromAssignmentExpr(module *Module, lhs, rhs *Term) (*Ru
 // ParseCompleteDocRuleFromEqExpr returns a rule if the expression can be
 // interpreted as a complete document definition.
 func ParseCompleteDocRuleFromEqExpr(module *Module, lhs, rhs *Term) (*Rule, error) {
+	var head *Head
 
-	var name Var
-
-	if RootDocumentRefs.Contains(lhs) {
-		name = lhs.Value.(Ref)[0].Value.(Var)
-	} else if v, ok := lhs.Value.(Var); ok {
-		name = v
+	if v, ok := lhs.Value.(Var); ok {
+		head = NewHead(v)
+	} else if r, ok := lhs.Value.(Ref); ok { // groundness ?
+		if _, ok := r[0].Value.(Var); !ok {
+			return nil, fmt.Errorf("invalid rule head: %v", r)
+		}
+		head = RefHead(r)
+		if len(r) > 1 && !r[len(r)-1].IsGround() {
+			return nil, fmt.Errorf("ref not ground")
+		}
 	} else {
 		return nil, fmt.Errorf("%v cannot be used for rule name", TypeName(lhs.Value))
 	}
+	head.Value = rhs
+	head.Location = lhs.Location
+	head.setJSONOptions(lhs.jsonOptions)
 
-	rule := &Rule{
-		Location: lhs.Location,
-		Head: &Head{
-			Location: lhs.Location,
-			Name:     name,
-			Value:    rhs,
-		},
-		Body: NewBody(
-			NewExpr(BooleanTerm(true).SetLocation(rhs.Location)).SetLocation(rhs.Location),
-		),
-		Module: module,
+	body := NewBody(NewExpr(BooleanTerm(true).SetLocation(rhs.Location)).SetLocation(rhs.Location))
+	setJSONOptions(body, &rhs.jsonOptions)
+
+	return &Rule{
+		Location:    lhs.Location,
+		Head:        head,
+		Body:        body,
+		Module:      module,
+		jsonOptions: lhs.jsonOptions,
+	}, nil
+}
+
+func ParseCompleteDocRuleWithDotsFromTerm(module *Module, term *Term) (*Rule, error) {
+	ref, ok := term.Value.(Ref)
+	if !ok {
+		return nil, fmt.Errorf("%v cannot be used for rule name", TypeName(term.Value))
 	}
 
-	return rule, nil
+	if _, ok := ref[0].Value.(Var); !ok {
+		return nil, fmt.Errorf("invalid rule head: %v", ref)
+	}
+	head := RefHead(ref, BooleanTerm(true).SetLocation(term.Location))
+	head.Location = term.Location
+	head.jsonOptions = term.jsonOptions
+
+	body := NewBody(NewExpr(BooleanTerm(true).SetLocation(term.Location)).SetLocation(term.Location))
+	setJSONOptions(body, &term.jsonOptions)
+
+	return &Rule{
+		Location: term.Location,
+		Head:     head,
+		Body:     body,
+		Module:   module,
+
+		jsonOptions: term.jsonOptions,
+	}, nil
 }
 
 // ParsePartialObjectDocRuleFromEqExpr returns a rule if the expression can be
 // interpreted as a partial object document definition.
 func ParsePartialObjectDocRuleFromEqExpr(module *Module, lhs, rhs *Term) (*Rule, error) {
-
 	ref, ok := lhs.Value.(Ref)
-	if !ok || len(ref) != 2 {
+	if !ok {
 		return nil, fmt.Errorf("%v cannot be used as rule name", TypeName(lhs.Value))
 	}
 
 	if _, ok := ref[0].Value.(Var); !ok {
-		return nil, fmt.Errorf("%vs cannot be used as rule name", TypeName(ref[0].Value))
+		return nil, fmt.Errorf("invalid rule head: %v", ref)
 	}
 
-	name := ref[0].Value.(Var)
-	key := ref[1]
+	head := RefHead(ref, rhs)
+	if len(ref) == 2 { // backcompat for naked `foo.bar = "baz"` statements
+		head.Name = ref[0].Value.(Var)
+		head.Key = ref[1]
+	}
+	head.Location = rhs.Location
+	head.jsonOptions = rhs.jsonOptions
+
+	body := NewBody(NewExpr(BooleanTerm(true).SetLocation(rhs.Location)).SetLocation(rhs.Location))
+	setJSONOptions(body, &rhs.jsonOptions)
 
 	rule := &Rule{
-		Location: rhs.Location,
-		Head: &Head{
-			Location: rhs.Location,
-			Name:     name,
-			Key:      key,
-			Value:    rhs,
-		},
-		Body: NewBody(
-			NewExpr(BooleanTerm(true).SetLocation(rhs.Location)).SetLocation(rhs.Location),
-		),
-		Module: module,
+		Location:    rhs.Location,
+		Head:        head,
+		Body:        body,
+		Module:      module,
+		jsonOptions: rhs.jsonOptions,
 	}
 
 	return rule, nil
@@ -308,30 +337,34 @@ func ParsePartialObjectDocRuleFromEqExpr(module *Module, lhs, rhs *Term) (*Rule,
 func ParsePartialSetDocRuleFromTerm(module *Module, term *Term) (*Rule, error) {
 
 	ref, ok := term.Value.(Ref)
-	if !ok {
+	if !ok || len(ref) == 1 {
 		return nil, fmt.Errorf("%vs cannot be used for rule head", TypeName(term.Value))
 	}
-
-	if len(ref) != 2 {
-		return nil, fmt.Errorf("refs cannot be used for rule")
+	if _, ok := ref[0].Value.(Var); !ok {
+		return nil, fmt.Errorf("invalid rule head: %v", ref)
 	}
 
-	name, ok := ref[0].Value.(Var)
-	if !ok {
-		return nil, fmt.Errorf("%vs cannot be used as rule name", TypeName(ref[0].Value))
+	head := RefHead(ref)
+	if len(ref) == 2 {
+		v, ok := ref[0].Value.(Var)
+		if !ok {
+			return nil, fmt.Errorf("%vs cannot be used for rule head", TypeName(term.Value))
+		}
+		head = NewHead(v)
+		head.Key = ref[1]
 	}
+	head.Location = term.Location
+	head.jsonOptions = term.jsonOptions
+
+	body := NewBody(NewExpr(BooleanTerm(true).SetLocation(term.Location)).SetLocation(term.Location))
+	setJSONOptions(body, &term.jsonOptions)
 
 	rule := &Rule{
-		Location: term.Location,
-		Head: &Head{
-			Location: term.Location,
-			Name:     name,
-			Key:      ref[1],
-		},
-		Body: NewBody(
-			NewExpr(BooleanTerm(true).SetLocation(term.Location)).SetLocation(term.Location),
-		),
-		Module: module,
+		Location:    term.Location,
+		Head:        head,
+		Body:        body,
+		Module:      module,
+		jsonOptions: term.jsonOptions,
 	}
 
 	return rule, nil
@@ -350,22 +383,24 @@ func ParseRuleFromCallEqExpr(module *Module, lhs, rhs *Term) (*Rule, error) {
 	if !ok {
 		return nil, fmt.Errorf("%vs cannot be used in function signature", TypeName(call[0].Value))
 	}
-
-	name, ok := ref[0].Value.(Var)
-	if !ok {
-		return nil, fmt.Errorf("%vs cannot be used in function signature", TypeName(ref[0].Value))
+	if _, ok := ref[0].Value.(Var); !ok {
+		return nil, fmt.Errorf("invalid rule head: %v", ref)
 	}
 
+	head := RefHead(ref, rhs)
+	head.Location = lhs.Location
+	head.Args = Args(call[1:])
+	head.jsonOptions = lhs.jsonOptions
+
+	body := NewBody(NewExpr(BooleanTerm(true).SetLocation(rhs.Location)).SetLocation(rhs.Location))
+	setJSONOptions(body, &rhs.jsonOptions)
+
 	rule := &Rule{
-		Location: lhs.Location,
-		Head: &Head{
-			Location: lhs.Location,
-			Name:     name,
-			Args:     Args(call[1:]),
-			Value:    rhs,
-		},
-		Body:   NewBody(NewExpr(BooleanTerm(true).SetLocation(rhs.Location)).SetLocation(rhs.Location)),
-		Module: module,
+		Location:    lhs.Location,
+		Head:        head,
+		Body:        body,
+		Module:      module,
+		jsonOptions: lhs.jsonOptions,
 	}
 
 	return rule, nil
@@ -380,19 +415,24 @@ func ParseRuleFromCallExpr(module *Module, terms []*Term) (*Rule, error) {
 	}
 
 	loc := terms[0].Location
-	args := terms[1:]
-	value := BooleanTerm(true).SetLocation(loc)
+	ref := terms[0].Value.(Ref)
+	if _, ok := ref[0].Value.(Var); !ok {
+		return nil, fmt.Errorf("invalid rule head: %v", ref)
+	}
+	head := RefHead(ref, BooleanTerm(true).SetLocation(loc))
+	head.Location = loc
+	head.Args = terms[1:]
+	head.jsonOptions = terms[0].jsonOptions
+
+	body := NewBody(NewExpr(BooleanTerm(true).SetLocation(loc)).SetLocation(loc))
+	setJSONOptions(body, &terms[0].jsonOptions)
 
 	rule := &Rule{
-		Location: loc,
-		Head: &Head{
-			Location: loc,
-			Name:     Var(terms[0].String()),
-			Args:     args,
-			Value:    value,
-		},
-		Module: module,
-		Body:   NewBody(NewExpr(BooleanTerm(true).SetLocation(loc)).SetLocation(loc)),
+		Location:    loc,
+		Head:        head,
+		Module:      module,
+		Body:        body,
+		jsonOptions: terms[0].jsonOptions,
 	}
 	return rule, nil
 }
@@ -435,10 +475,13 @@ func ParseModuleWithOpts(filename, input string, popts ParserOptions) (*Module, 
 // ParseBody returns exactly one body.
 // If multiple bodies are parsed, an error is returned.
 func ParseBody(input string) (Body, error) {
-	return ParseBodyWithOpts(input, ParserOptions{})
+	return ParseBodyWithOpts(input, ParserOptions{SkipRules: true})
 }
 
+// ParseBodyWithOpts returns exactly one body. It does _not_ set SkipRules: true on its own,
+// but respects whatever ParserOptions it's been given.
 func ParseBodyWithOpts(input string, popts ParserOptions) (Body, error) {
+
 	stmts, _, err := ParseStatementsWithOpts("", input, popts)
 	if err != nil {
 		return nil, err
@@ -467,7 +510,7 @@ func ParseBodyWithOpts(input string, popts ParserOptions) (Body, error) {
 func ParseExpr(input string) (*Expr, error) {
 	body, err := ParseBody(input)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to parse expression")
+		return nil, fmt.Errorf("failed to parse expression: %w", err)
 	}
 	if len(body) != 1 {
 		return nil, fmt.Errorf("expected exactly one expression but got: %v", body)
@@ -494,7 +537,7 @@ func ParsePackage(input string) (*Package, error) {
 func ParseTerm(input string) (*Term, error) {
 	body, err := ParseBody(input)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to parse term")
+		return nil, fmt.Errorf("failed to parse term: %w", err)
 	}
 	if len(body) != 1 {
 		return nil, fmt.Errorf("expected exactly one term but got: %v", body)
@@ -510,7 +553,7 @@ func ParseTerm(input string) (*Term, error) {
 func ParseRef(input string) (Ref, error) {
 	term, err := ParseTerm(input)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to parse ref")
+		return nil, fmt.Errorf("failed to parse ref: %w", err)
 	}
 	ref, ok := term.Value.(Ref)
 	if !ok {
@@ -519,21 +562,27 @@ func ParseRef(input string) (Ref, error) {
 	return ref, nil
 }
 
-// ParseRule returns exactly one rule.
+// ParseRuleWithOpts returns exactly one rule.
 // If multiple rules are parsed, an error is returned.
-func ParseRule(input string) (*Rule, error) {
-	stmts, _, err := ParseStatements("", input)
+func ParseRuleWithOpts(input string, opts ParserOptions) (*Rule, error) {
+	stmts, _, err := ParseStatementsWithOpts("", input, opts)
 	if err != nil {
 		return nil, err
 	}
 	if len(stmts) != 1 {
-		return nil, fmt.Errorf("expected exactly one statement (rule)")
+		return nil, fmt.Errorf("expected exactly one statement (rule), got %v = %T, %T", stmts, stmts[0], stmts[1])
 	}
 	rule, ok := stmts[0].(*Rule)
 	if !ok {
 		return nil, fmt.Errorf("expected rule but got %T", stmts[0])
 	}
 	return rule, nil
+}
+
+// ParseRule returns exactly one rule.
+// If multiple rules are parsed, an error is returned.
+func ParseRule(input string) (*Rule, error) {
+	return ParseRuleWithOpts(input, ParserOptions{})
 }
 
 // ParseStatement returns exactly one statement.
@@ -566,7 +615,10 @@ func ParseStatementsWithOpts(filename, input string, popts ParserOptions) ([]Sta
 		WithProcessAnnotation(popts.ProcessAnnotation).
 		WithFutureKeywords(popts.FutureKeywords...).
 		WithAllFutureKeywords(popts.AllFutureKeywords).
-		WithCapabilities(popts.Capabilities)
+		WithCapabilities(popts.Capabilities).
+		WithSkipRules(popts.SkipRules).
+		WithJSONOptions(popts.JSONOptions).
+		withUnreleasedKeywords(popts.unreleasedKeywords)
 
 	stmts, comments, errs := parser.Parse()
 
@@ -585,14 +637,15 @@ func parseModule(filename string, stmts []Statement, comments []*Comment) (*Modu
 
 	var errs Errors
 
-	_package, ok := stmts[0].(*Package)
+	pkg, ok := stmts[0].(*Package)
 	if !ok {
 		loc := stmts[0].Loc()
 		errs = append(errs, NewError(ParseErr, loc, "package expected"))
 	}
 
 	mod := &Module{
-		Package: _package,
+		Package: pkg,
+		stmts:   stmts,
 	}
 
 	// The comments slice only holds comments that were not their own statements.
@@ -609,14 +662,14 @@ func parseModule(filename string, stmts []Statement, comments []*Comment) (*Modu
 			rule, err := ParseRuleFromBody(mod, stmt)
 			if err != nil {
 				errs = append(errs, NewError(ParseErr, stmt[0].Location, err.Error()))
-			} else {
-				mod.Rules = append(mod.Rules, rule)
-
-				// NOTE(tsandall): the statement should now be interpreted as a
-				// rule so update the statement list. This is important for the
-				// logic below that associates annotations with statements.
-				stmts[i+1] = rule
+				continue
 			}
+			mod.Rules = append(mod.Rules, rule)
+
+			// NOTE(tsandall): the statement should now be interpreted as a
+			// rule so update the statement list. This is important for the
+			// logic below that associates annotations with statements.
+			stmts[i+1] = rule
 		case *Package:
 			errs = append(errs, NewError(ParseErr, stmt.Loc(), "unexpected package"))
 		case *Annotations:
@@ -632,58 +685,13 @@ func parseModule(filename string, stmts []Statement, comments []*Comment) (*Modu
 		return nil, errs
 	}
 
-	// Find first non-annotation statement following each annotation and attach
-	// the annotation to that statement.
-	for _, a := range mod.Annotations {
-		for _, stmt := range stmts {
-			_, ok := stmt.(*Annotations)
-			if !ok {
-				if stmt.Loc().Row > a.Location.Row {
-					a.node = stmt
-					break
-				}
-			}
-		}
-
-		if a.Scope == "" {
-			switch a.node.(type) {
-			case *Rule:
-				a.Scope = annotationScopeRule
-			case *Package:
-				a.Scope = annotationScopePackage
-			case *Import:
-				a.Scope = annotationScopeImport
-			}
-		}
-
-		if err := validateAnnotationScopeAttachment(a); err != nil {
-			errs = append(errs, err)
-		}
-	}
+	errs = append(errs, attachAnnotationsNodes(mod)...)
 
 	if len(errs) > 0 {
 		return nil, errs
 	}
 
 	return mod, nil
-}
-
-func validateAnnotationScopeAttachment(a *Annotations) *Error {
-
-	switch a.Scope {
-	case annotationScopeRule, annotationScopeDocument:
-		if _, ok := a.node.(*Rule); ok {
-			return nil
-		}
-		return newScopeAttachmentErr(a, "rule")
-	case annotationScopePackage, annotationScopeSubpackages:
-		if _, ok := a.node.(*Package); ok {
-			return nil
-		}
-		return newScopeAttachmentErr(a, "package")
-	}
-
-	return NewError(ParseErr, a.Loc(), "invalid annotation scope '%v'", a.Scope)
 }
 
 func newScopeAttachmentErr(a *Annotations, want string) *Error {
@@ -699,6 +707,16 @@ func setRuleModule(rule *Rule, module *Module) {
 	if rule.Else != nil {
 		setRuleModule(rule.Else, module)
 	}
+}
+
+func setJSONOptions(x interface{}, jsonOptions *JSONOptions) {
+	vis := NewGenericVisitor(func(x interface{}) bool {
+		if x, ok := x.(customJSON); ok {
+			x.setJSONOptions(*jsonOptions)
+		}
+		return false
+	})
+	vis.Walk(x)
 }
 
 // ParserErrorDetail holds additional details for parser errors.

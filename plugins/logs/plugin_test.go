@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,8 +30,9 @@ import (
 	"github.com/open-policy-agent/opa/rego"
 	"github.com/open-policy-agent/opa/server"
 	"github.com/open-policy-agent/opa/storage"
-	"github.com/open-policy-agent/opa/storage/inmem"
+	inmem "github.com/open-policy-agent/opa/storage/inmem/test"
 	"github.com/open-policy-agent/opa/topdown"
+	"github.com/open-policy-agent/opa/topdown/builtins"
 	"github.com/open-policy-agent/opa/topdown/print"
 	"github.com/open-policy-agent/opa/util"
 	"github.com/open-policy-agent/opa/version"
@@ -320,6 +322,10 @@ func TestPluginStartSameInput(t *testing.T) {
 
 	if !reflect.DeepEqual(chunk3[expLen3-1], exp) {
 		t.Fatalf("Expected %+v but got %+v", exp, chunk3[expLen3-1])
+	}
+
+	if fixture.plugin.status.Code != "" {
+		t.Fatal("expected no error in status update")
 	}
 }
 
@@ -748,6 +754,357 @@ func TestPluginRateLimitFloat(t *testing.T) {
 	compareLogEvent(t, chunk[0], exp)
 }
 
+func TestPluginStatusUpdateHTTPError(t *testing.T) {
+	ctx := context.Background()
+
+	fixture := newTestFixture(t, testFixtureOptions{ReportingUploadSizeLimitBytes: 300})
+	defer fixture.server.stop()
+
+	fixture.server.ch = make(chan []EventV1, 3)
+
+	var input interface{} = map[string]interface{}{"method": "GET"}
+	var result1 interface{} = false
+
+	_ = fixture.plugin.Log(ctx, logServerInfo("abc", input, result1))
+	_ = fixture.plugin.Log(ctx, logServerInfo("def", input, result1))
+	_ = fixture.plugin.Log(ctx, logServerInfo("ghi", input, result1))
+
+	bufLen := fixture.plugin.buffer.Len()
+	if bufLen < 1 {
+		t.Fatal("Expected buffer length of at least 1")
+	}
+
+	fixture.server.expCode = 500
+	err := fixture.plugin.doOneShot(ctx)
+	if err == nil {
+		t.Fatal("Expected error")
+	}
+
+	<-fixture.server.ch
+
+	if fixture.plugin.buffer.Len() < bufLen {
+		t.Fatal("Expected buffer to be preserved")
+	}
+
+	if fixture.plugin.status.HTTPCode != "500" {
+		t.Fatal("expected http_code to be 500 instead of ", fixture.plugin.status.HTTPCode)
+	}
+
+	msg := "log upload failed, server replied with HTTP 500 Internal Server Error"
+	if fixture.plugin.status.Message != msg {
+		t.Fatalf("expected status message to be %v instead of %v", msg, fixture.plugin.status.Message)
+	}
+}
+
+func TestPluginStatusUpdateEncodingFailure(t *testing.T) {
+	ctx := context.Background()
+	testLogger := test.New()
+
+	ts, err := time.Parse(time.RFC3339Nano, "2018-01-01T12:00:00.123456Z")
+	if err != nil {
+		panic(err)
+	}
+
+	fixture := newTestFixture(t, testFixtureOptions{
+		ConsoleLogger:                 testLogger,
+		ReportingUploadSizeLimitBytes: 1,
+	})
+	defer fixture.server.stop()
+
+	m := metrics.New()
+	fixture.plugin.metrics = m
+	fixture.plugin.enc.metrics = m
+
+	var input interface{} = map[string]interface{}{"method": "GET"}
+	var result interface{} = false
+
+	event := &server.Info{
+		DecisionID: "abc",
+		Path:       "foo/bar",
+		Input:      &input,
+		Results:    &result,
+		RemoteAddr: "test-1",
+		Timestamp:  ts,
+	}
+
+	err = fixture.plugin.Log(ctx, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fixture.plugin.mtx.Lock()
+	if fixture.plugin.enc.bytesWritten != 0 {
+		t.Fatal("Expected no event to be written into the encoder")
+	}
+	fixture.plugin.mtx.Unlock()
+
+	// Create a status plugin that logs to console
+	pluginConfig := []byte(`{
+			"console": true,
+		}`)
+
+	config, _ := status.ParseConfig(pluginConfig, fixture.manager.Services(), nil)
+	p := status.New(config, fixture.manager).WithMetrics(fixture.plugin.metrics)
+
+	fixture.manager.Register(status.Name, p)
+	if err := fixture.manager.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Trigger a status update
+	fixture.server.expCode = 200
+	err = fixture.plugin.doOneShot(ctx)
+	if err != nil {
+		t.Fatal("Unexpected error")
+	}
+
+	// Give the logger / console some time to process and print the events
+	time.Sleep(10 * time.Millisecond)
+	p.Stop(ctx)
+
+	entries := testLogger.Entries()
+	if len(entries) == 0 {
+		t.Fatal("Expected log entries but got none")
+	}
+
+	// Pick the last entry as it should have the decision log metrics
+	e := entries[len(entries)-1]
+
+	if _, ok := e.Fields["metrics"]; !ok {
+		t.Fatal("Expected metrics field in status update")
+	}
+
+	fmt.Println(e.Fields["metrics"])
+
+	exp := map[string]interface{}{"<built-in>": map[string]interface{}{"counter_decision_logs_encoding_failure": json.Number("1"),
+		"counter_enc_log_exceeded_upload_size_limit_bytes": json.Number("1")}}
+
+	if !reflect.DeepEqual(e.Fields["metrics"], exp) {
+		t.Fatalf("Expected %v but got %v", exp, e.Fields["metrics"])
+	}
+}
+
+func TestPluginStatusUpdateBufferSizeExceeded(t *testing.T) {
+	ctx := context.Background()
+	testLogger := test.New()
+
+	ts, err := time.Parse(time.RFC3339Nano, "2018-01-01T12:00:00.123456Z")
+	if err != nil {
+		panic(err)
+	}
+
+	fixture := newTestFixture(t, testFixtureOptions{
+		ConsoleLogger:                 testLogger,
+		ReportingBufferSizeLimitBytes: 200,
+		ReportingUploadSizeLimitBytes: 300,
+	})
+	defer fixture.server.stop()
+
+	fixture.server.ch = make(chan []EventV1, 1)
+
+	fixture.plugin.metrics = metrics.New()
+
+	var input interface{} = map[string]interface{}{"method": "GET"}
+	var result interface{} = false
+
+	event1 := &server.Info{
+		DecisionID: "abc",
+		Path:       "foo/bar",
+		Input:      &input,
+		Results:    &result,
+		RemoteAddr: "test-1",
+		Timestamp:  ts,
+	}
+
+	event2 := &server.Info{
+		DecisionID: "def",
+		Path:       "foo/baz",
+		Input:      &input,
+		Results:    &result,
+		RemoteAddr: "test-2",
+		Timestamp:  ts,
+	}
+
+	event3 := &server.Info{
+		DecisionID: "ghi",
+		Path:       "foo/aux",
+		Input:      &input,
+		Results:    &result,
+		RemoteAddr: "test-3",
+		Timestamp:  ts,
+	}
+
+	// write event 1 and 2 into the encoder and check the chunk is inserted into the buffer
+	_ = fixture.plugin.Log(ctx, event1)
+	_ = fixture.plugin.Log(ctx, event2)
+
+	fixture.plugin.mtx.Lock()
+	if fixture.plugin.enc.bytesWritten == 0 {
+		t.Fatal("Expected event to be written into the encoder")
+	}
+
+	if fixture.plugin.buffer.Len() == 0 {
+		t.Fatal("Expected one chunk to be written into the buffer")
+	}
+	fixture.plugin.mtx.Unlock()
+
+	// write event 3 into the encoder and then flush the encoder which will result in the event being
+	// written to the buffer. But given the buffer size it won't be able to hold this event and will
+	// drop the existing chunk
+	_ = fixture.plugin.Log(ctx, event3)
+
+	// Create a status plugin that logs to console
+	pluginConfig := []byte(`{
+			"console": true,
+		}`)
+
+	config, _ := status.ParseConfig(pluginConfig, fixture.manager.Services(), nil)
+	p := status.New(config, fixture.manager).WithMetrics(fixture.plugin.metrics)
+
+	fixture.manager.Register(status.Name, p)
+	if err := fixture.manager.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Trigger a status update
+	fixture.server.expCode = 200
+	err = fixture.plugin.doOneShot(ctx)
+	if err != nil {
+		t.Fatal("Unexpected error")
+	}
+
+	<-fixture.server.ch
+
+	// Give the logger / console some time to process and print the events
+	time.Sleep(10 * time.Millisecond)
+	p.Stop(ctx)
+
+	entries := testLogger.Entries()
+	if len(entries) == 0 {
+		t.Fatal("Expected log entries but got none")
+	}
+
+	// Pick the last entry as it should have the decision log metrics
+	e := entries[len(entries)-1]
+
+	if _, ok := e.Fields["metrics"]; !ok {
+		t.Fatal("Expected metrics field in status update")
+	}
+
+	exp := map[string]interface{}{"<built-in>": map[string]interface{}{"counter_decision_logs_dropped_buffer_size_limit_bytes_exceeded": json.Number("1")}}
+
+	if !reflect.DeepEqual(e.Fields["metrics"], exp) {
+		t.Fatalf("Expected %v but got %v", exp, e.Fields["metrics"])
+	}
+}
+
+func TestPluginStatusUpdateRateLimitExceeded(t *testing.T) {
+	ctx := context.Background()
+	testLogger := test.New()
+
+	ts, err := time.Parse(time.RFC3339Nano, "2018-01-01T12:00:00.123456Z")
+	if err != nil {
+		panic(err)
+	}
+
+	numDecisions := 1 // 1 decision per second
+	fixture := newTestFixture(t, testFixtureOptions{
+		ConsoleLogger:                  testLogger,
+		ReportingMaxDecisionsPerSecond: float64(numDecisions),
+		ReportingUploadSizeLimitBytes:  300,
+	})
+	defer fixture.server.stop()
+
+	fixture.server.ch = make(chan []EventV1, 1)
+
+	fixture.plugin.metrics = metrics.New()
+
+	var input interface{} = map[string]interface{}{"method": "GET"}
+	var result interface{} = false
+
+	event1 := &server.Info{
+		DecisionID: "abc",
+		Path:       "foo/bar",
+		Input:      &input,
+		Results:    &result,
+		RemoteAddr: "test-1",
+		Timestamp:  ts,
+	}
+
+	event2 := &server.Info{
+		DecisionID: "def",
+		Path:       "foo/baz",
+		Input:      &input,
+		Results:    &result,
+		RemoteAddr: "test-2",
+		Timestamp:  ts,
+	}
+
+	event3 := &server.Info{
+		DecisionID: "ghi",
+		Path:       "foo/aux",
+		Input:      &input,
+		Results:    &result,
+		RemoteAddr: "test-3",
+		Timestamp:  ts,
+	}
+
+	_ = fixture.plugin.Log(ctx, event1) // event 1 should be written into the encoder
+
+	fixture.plugin.mtx.Lock()
+	if fixture.plugin.enc.bytesWritten == 0 {
+		t.Fatal("Expected event to be written into the encoder")
+	}
+	fixture.plugin.mtx.Unlock()
+
+	// Create a status plugin that logs to console
+	pluginConfig := []byte(`{
+			"console": true,
+		}`)
+
+	config, _ := status.ParseConfig(pluginConfig, fixture.manager.Services(), nil)
+	p := status.New(config, fixture.manager).WithMetrics(fixture.plugin.metrics)
+
+	fixture.manager.Register(status.Name, p)
+	if err := fixture.manager.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	_ = fixture.plugin.Log(ctx, event2) // event 2 should not be written into the encoder as rate limit exceeded
+	_ = fixture.plugin.Log(ctx, event3) // event 3 should not be written into the encoder as rate limit exceeded
+
+	// Trigger a status update
+	fixture.server.expCode = 200
+	err = fixture.plugin.doOneShot(ctx)
+	if err != nil {
+		t.Fatal("Unexpected error")
+	}
+
+	<-fixture.server.ch
+
+	// Give the logger / console some time to process and print the events
+	time.Sleep(10 * time.Millisecond)
+	p.Stop(ctx)
+
+	entries := testLogger.Entries()
+	if len(entries) == 0 {
+		t.Fatal("Expected log entries but got none")
+	}
+
+	// Pick the last entry as it should have the decision log metrics
+	e := entries[len(entries)-1]
+
+	if _, ok := e.Fields["metrics"]; !ok {
+		t.Fatal("Expected metrics field in status update")
+	}
+
+	exp := map[string]interface{}{"<built-in>": map[string]interface{}{"counter_decision_logs_dropped_rate_limit_exceeded": json.Number("2")}}
+
+	if !reflect.DeepEqual(e.Fields["metrics"], exp) {
+		t.Fatalf("Expected %v but got %v", exp, e.Fields["metrics"])
+	}
+}
+
 func TestPluginRateLimitRequeue(t *testing.T) {
 	ctx := context.Background()
 
@@ -904,10 +1261,61 @@ func TestPluginRateLimitDropCountStatus(t *testing.T) {
 		t.Fatal("Expected metrics")
 	}
 
-	exp := map[string]interface{}{"<built-in>": map[string]interface{}{"counter_decision_logs_dropped": json.Number("2")}}
+	exp := map[string]interface{}{"<built-in>": map[string]interface{}{"counter_decision_logs_dropped_rate_limit_exceeded": json.Number("2")}}
 
 	if !reflect.DeepEqual(e.Fields["metrics"], exp) {
 		t.Fatalf("Expected %v but got %v", exp, e.Fields["metrics"])
+	}
+}
+
+func TestChunkMaxUploadSizeLimitNDBCacheDropping(t *testing.T) {
+	ctx := context.Background()
+	testLogger := test.New()
+
+	ts, err := time.Parse(time.RFC3339Nano, "2018-01-01T12:00:00.123456Z")
+	if err != nil {
+		panic(err)
+	}
+
+	fixture := newTestFixture(t, testFixtureOptions{
+		ConsoleLogger:                  testLogger,
+		ReportingMaxDecisionsPerSecond: float64(1), // 1 decision per second
+		ReportingUploadSizeLimitBytes:  400,
+	})
+	defer fixture.server.stop()
+
+	fixture.plugin.metrics = metrics.New()
+
+	var input interface{} = map[string]interface{}{"method": "GET"}
+	var result interface{} = false
+
+	// Purposely oversized NDBCache entry will force dropping during Log().
+	var ndbCacheExample interface{} = ast.MustJSON(builtins.NDBCache{
+		"test.custom_space_waster": ast.NewObject([2]*ast.Term{
+			ast.ArrayTerm(),
+			ast.StringTerm(strings.Repeat("Wasted space... ", 200)),
+		}),
+	}.AsValue())
+
+	event := &server.Info{
+		DecisionID:     "abc",
+		Path:           "foo/bar",
+		Input:          &input,
+		Results:        &result,
+		RemoteAddr:     "test",
+		Timestamp:      ts,
+		NDBuiltinCache: &ndbCacheExample,
+	}
+
+	beforeNDBDropCount := fixture.plugin.metrics.Counter(logNDBDropCounterName).Value().(uint64)
+	err = fixture.plugin.Log(ctx, event) // event should be written into the encoder
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterNDBDropCount := fixture.plugin.metrics.Counter(logNDBDropCounterName).Value().(uint64)
+
+	if afterNDBDropCount != beforeNDBDropCount+1 {
+		t.Fatalf("Expected %v NDBCache drop events, saw %v events instead.", beforeNDBDropCount+1, afterNDBDropCount)
 	}
 }
 
@@ -936,11 +1344,47 @@ func TestPluginRateLimitBadConfig(t *testing.T) {
 	}
 }
 
+func TestPluginNoLogging(t *testing.T) {
+	// Given no custom plugin, no service(s) and no console logging configured,
+	// this should not be an error, but neither do we need to initiate the plugin
+	cases := []struct {
+		note   string
+		config []byte
+	}{
+		{
+			note:   "no plugin attributes",
+			config: []byte(`{}`),
+		},
+		{
+			note:   "empty plugin configuration",
+			config: []byte(`{"decision_logs": {}}`),
+		},
+		{
+			note:   "only disabled console logger",
+			config: []byte(`{"decision_logs": {"console": "false"}}`),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.note, func(t *testing.T) {
+			config, err := ParseConfig(tc.config, []string{}, nil)
+			if err != nil {
+				t.Errorf("expected no error: %v", err)
+			}
+			if config != nil {
+				t.Errorf("excected no config for a no-op logging plugin")
+			}
+		})
+	}
+}
+
 func TestPluginTriggerManual(t *testing.T) {
 	ctx := context.Background()
 
 	fixture := newTestFixture(t)
 	defer fixture.server.stop()
+
+	fixture.server.server.Config.SetKeepAlivesEnabled(false)
 
 	fixture.server.ch = make(chan []EventV1, 4)
 	tr := plugins.TriggerManual
@@ -1299,16 +1743,18 @@ func (a appendingPrintHook) Print(_ print.Context, s string) error {
 
 func TestPluginMasking(t *testing.T) {
 	tests := []struct {
-		note        string
-		rawPolicy   []byte
-		expErased   []string
-		expMasked   []string
-		expPrinted  []string
-		errManager  error
-		expErr      error
-		input       interface{}
-		expected    interface{}
-		reconfigure bool
+		note          string
+		rawPolicy     []byte
+		expErased     []string
+		expMasked     []string
+		expPrinted    []string
+		errManager    error
+		expErr        error
+		input         interface{}
+		expected      interface{}
+		ndbcache      interface{}
+		ndbc_expected interface{}
+		reconfigure   bool
 	}{
 		{
 			note: "simple erase (with body true)",
@@ -1525,6 +1971,59 @@ func TestPluginMasking(t *testing.T) {
 			},
 			expPrinted: []string{"Erasing /input/password"},
 		},
+		{
+			note: "simple upsert on nd_builtin_cache",
+			rawPolicy: []byte(`
+				package system.log
+				mask[{"op": "upsert", "path": "/nd_builtin_cache/rand.intn", "value": x}] {
+					input.nd_builtin_cache["rand.intn"]
+					x := "**REDACTED**"
+				}`),
+			expMasked: []string{"/nd_builtin_cache/rand.intn"},
+			ndbcache: map[string]interface{}{
+				// Simulate rand.intn("z", 15) call, with output of 7.
+				"rand.intn": map[string]interface{}{"[\"z\",15]": json.Number("7")},
+			},
+			ndbc_expected: map[string]interface{}{
+				"rand.intn": "**REDACTED**",
+			},
+		},
+		{
+			note: "simple upsert on nd_builtin_cache with multiple entries",
+			rawPolicy: []byte(`
+				package system.log
+				mask[{"op": "upsert", "path": "/nd_builtin_cache/rand.intn", "value": x}] {
+					input.nd_builtin_cache["rand.intn"]
+					x := "**REDACTED**"
+				}
+
+				mask[{"op": "upsert", "path": "/nd_builtin_cache/net.lookup_ip_addr", "value": y}] {
+					obj := input.nd_builtin_cache["net.lookup_ip_addr"]
+					y := object.union({k: "4.4.x.x" | obj[k]; startswith(k, "[\"4.4.")},
+					                  {k: obj[k] | obj[k]; not startswith(k, "[\"4.4.")})
+				}
+				`),
+			expMasked: []string{"/nd_builtin_cache/net.lookup_ip_addr", "/nd_builtin_cache/rand.intn"},
+			ndbcache: map[string]interface{}{
+				// Simulate rand.intn("z", 15) call, with output of 7.
+				"rand.intn": map[string]interface{}{"[\"z\",15]": json.Number("7")},
+				"net.lookup_ip_addr": map[string]interface{}{
+					"[\"1.1.1.1\"]": "1.1.1.1",
+					"[\"2.2.2.2\"]": "2.2.2.2",
+					"[\"3.3.3.3\"]": "3.3.3.3",
+					"[\"4.4.4.4\"]": "4.4.4.4",
+				},
+			},
+			ndbc_expected: map[string]interface{}{
+				"rand.intn": "**REDACTED**",
+				"net.lookup_ip_addr": map[string]interface{}{
+					"[\"1.1.1.1\"]": "1.1.1.1",
+					"[\"2.2.2.2\"]": "2.2.2.2",
+					"[\"3.3.3.3\"]": "3.3.3.3",
+					"[\"4.4.4.4\"]": "4.4.x.x",
+				},
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -1561,6 +2060,7 @@ func TestPluginMasking(t *testing.T) {
 					if tc.errManager.Error() != err.Error() {
 						t.Fatalf("expected error %s, but got %s", tc.errManager.Error(), err.Error())
 					}
+					return
 				}
 			}
 
@@ -1576,15 +2076,24 @@ func TestPluginMasking(t *testing.T) {
 			}
 
 			event := &EventV1{
-				Input: &tc.input,
+				Input:          &tc.input,
+				NDBuiltinCache: &tc.ndbcache,
+			}
+			input, err := event.AST()
+			if err != nil {
+				t.Fatal(err)
 			}
 
-			if err := plugin.maskEvent(ctx, nil, event); err != nil {
+			if err := plugin.maskEvent(ctx, nil, input, event); err != nil {
 				t.Fatal(err)
 			}
 
 			if !reflect.DeepEqual(tc.expected, *event.Input) {
 				t.Fatalf("Expected %#+v but got %#+v:", tc.expected, *event.Input)
+			}
+
+			if !reflect.DeepEqual(tc.ndbc_expected, *event.NDBuiltinCache) {
+				t.Fatalf("Expected %#+v but got %#+v:", tc.ndbc_expected, *event.NDBuiltinCache)
 			}
 
 			if len(tc.expErased) > 0 {
@@ -1617,8 +2126,12 @@ func TestPluginMasking(t *testing.T) {
 				event = &EventV1{
 					Input: &tc.input,
 				}
+				input, err := event.AST()
+				if err != nil {
+					t.Fatal(err)
+				}
 
-				if err := plugin.maskEvent(ctx, nil, event); err != nil {
+				if err := plugin.maskEvent(ctx, nil, input, event); err != nil {
 					t.Fatal(err)
 				}
 
@@ -1632,10 +2145,104 @@ func TestPluginMasking(t *testing.T) {
 	}
 }
 
+func TestPluginDrop(t *testing.T) {
+	// Test cases
+	tests := []struct {
+		note      string
+		rawPolicy []byte
+		event     *EventV1
+		expected  bool
+	}{
+		{
+			note: "simple drop",
+			rawPolicy: []byte(`
+			package system.log
+			drop {
+				endswith(input.path, "bar")
+			}`),
+			event: &EventV1{Path: "foo/bar"},
+
+			expected: true,
+		},
+		{
+			note: "no drop",
+			rawPolicy: []byte(`
+			package system.log
+			drop {
+				endswith(input.path, "bar")
+			}`),
+			event:    &EventV1{Path: "foo/foo"},
+			expected: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.note, func(t *testing.T) {
+			// Setup fixture. Populate store with simple drop policy.
+			ctx := context.Background()
+			store := inmem.New()
+
+			//checks if raw policy is valid and stores policy in store
+			err := storage.Txn(ctx, store, storage.WriteParams, func(txn storage.Transaction) error {
+				if err := store.UpsertPolicy(ctx, txn, "test.rego", tc.rawPolicy); err != nil {
+					return err
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var output []string
+
+			// Create and start manager. Start is required so that stored policies
+			// get compiled and made available to the plugin.
+			manager, err := plugins.New(
+				nil,
+				"test",
+				store,
+				plugins.EnablePrintStatements(true),
+				plugins.PrintHook(appendingPrintHook{printed: &output}),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := manager.Start(ctx); err != nil {
+				t.Fatal(err)
+			}
+
+			// Instantiate the plugin.
+			cfg := &Config{Service: "svc"}
+			trigger := plugins.DefaultTriggerMode
+			cfg.validateAndInjectDefaults([]string{"svc"}, nil, &trigger)
+
+			plugin := New(cfg, manager)
+
+			if err := plugin.Start(ctx); err != nil {
+				t.Fatal(err)
+			}
+			input, err := tc.event.AST()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			drop, err := plugin.dropEvent(ctx, nil, input)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if tc.expected != drop {
+				t.Errorf("Plugin: Expected drop to be %v got %v", tc.expected, drop)
+			}
+		})
+	}
+}
+
 type testFixtureOptions struct {
 	ConsoleLogger                  *test.Logger
 	ReportingUploadSizeLimitBytes  int64
 	ReportingMaxDecisionsPerSecond float64
+	ReportingBufferSizeLimitBytes  int64
 	Resource                       *string
 	TestServerPath                 *string
 	PartitionName                  *string
@@ -1746,6 +2353,10 @@ func newTestFixture(t *testing.T, opts ...testFixtureOptions) testFixture {
 		config.Reporting.UploadSizeLimitBytes = &options.ReportingUploadSizeLimitBytes
 	}
 
+	if options.ReportingBufferSizeLimitBytes != 0 {
+		config.Reporting.BufferSizeLimitBytes = &options.ReportingBufferSizeLimitBytes
+	}
+
 	if s, ok := manager.PluginStatus()[Name]; ok {
 		t.Fatalf("Unexpected status found in plugin manager for %s: %+v", Name, s)
 	}
@@ -1804,16 +2415,6 @@ func TestParseConfigDefaultServiceWithConsole(t *testing.T) {
 
 	if config.Service != "" {
 		t.Errorf("Expected no service in config, actual = '%s'", config.Service)
-	}
-}
-
-func TestParseConfigDefaultServiceWithNoServiceOrConsole(t *testing.T) {
-	loggerConfig := []byte(`{}`)
-
-	_, err := ParseConfig([]byte(loggerConfig), []string{}, nil)
-
-	if err == nil {
-		t.Errorf("Expected an error but err==nil")
 	}
 }
 
@@ -1893,6 +2494,13 @@ func TestEventV1ToAST(t *testing.T) {
 	if err := util.UnmarshalJSON([]byte(largeEvent), &bigEvent); err != nil {
 		t.Fatalf("Unexpected error: %s", err)
 	}
+
+	var ndbCacheExample interface{} = ast.MustJSON(builtins.NDBCache{
+		"time.now_ns": ast.NewObject([2]*ast.Term{
+			ast.ArrayTerm(),
+			ast.NumberTerm("1663803565571081429"),
+		}),
+	}.AsValue())
 
 	cases := []struct {
 		note  string
@@ -2011,6 +2619,44 @@ func TestEventV1ToAST(t *testing.T) {
 		{
 			note:  "big event",
 			event: bigEvent,
+		},
+		{
+			note: "event with nd_builtin_cache",
+			event: EventV1{
+				Labels:     map[string]string{"foo": "1", "bar": "2"},
+				DecisionID: "1234567890",
+				Bundles: map[string]BundleInfoV1{
+					"b1": {"revision7"},
+					"b2": {"0"},
+					"b3": {},
+				},
+				Input:          &goInput,
+				Path:           "/http/authz/allow",
+				RequestedBy:    "[::1]:59943",
+				Result:         &result,
+				Timestamp:      time.Now(),
+				inputAST:       astInput,
+				NDBuiltinCache: &ndbCacheExample,
+			},
+		},
+		{
+			note: "event with req id",
+			event: EventV1{
+				Labels:     map[string]string{"foo": "1", "bar": "2"},
+				DecisionID: "1234567890",
+				Bundles: map[string]BundleInfoV1{
+					"b1": {"revision7"},
+					"b2": {"0"},
+					"b3": {},
+				},
+				Input:       &goInput,
+				Path:        "/http/authz/allow",
+				RequestedBy: "[::1]:59943",
+				Result:      &result,
+				Timestamp:   time.Now(),
+				RequestID:   1,
+				inputAST:    astInput,
+			},
 		},
 	}
 

@@ -1,7 +1,7 @@
 ---
 title: WebAssembly
-kind: misc
-weight: 1
+kind: documentation
+weight: 110
 ---
 
 # What is WebAssembly (Wasm)?
@@ -33,7 +33,7 @@ You can compile Rego policies into Wasm modules using the `opa build` subcommand
 
 For example, the `opa build` command below compiles the `example.rego` file into a
 Wasm module and packages it into an OPA bundle. The `wasm` target requires at least
-one entrypoint rule (specified by `-e`).
+one entrypoint rule (specified by `-e`, or a metadata `entrypoint` annotation).
 
 ```bash
 opa build -t wasm -e example/allow example.rego
@@ -41,6 +41,7 @@ opa build -t wasm -e example/allow example.rego
 
 The output of a Wasm module built this way contain the `result` of evaluating the
 entrypoint rule. For example:
+
 ```json
 [
   {
@@ -136,33 +137,38 @@ ABI | Notes
 1.0 | Start of ABI versioning.
 1.1 | Adds export `memory`.
 1.2 | Adds exported function `opa_eval`.
+1.3 | Adds exported functions `opa_value_free`, `opa_heap_blocks_stash`, `opa_heap_blocks_restore`, `opa_heap_stash_clear`.
 
 #### Exports
 
 The primary exported functions for interacting with policy modules are listed below.
 In the ABI column, you can find the ABI version with which the export was introduced.
 
-| Function Signature | Description | ABI
+| Function | Description | ABI
 | --- | --- | --- |
-| <span class="opa-keep-it-together">`int32 eval(ctx_addr)`</span> | Evaluates the loaded policy with the provided evaluation context. The return value is reserved for future use. | 1.0 |
-| <span class="opa-keep-it-together">`value_addr builtins(void)`</span> | Returns the address of a mapping of built-in function names to numeric identifiers that are required by the policy. | 1.0 |
-| <span class="opa-keep-it-together">`value_addr entrypoints(void)`</span> | Returns the address of a mapping of entrypoints to numeric identifiers that can be selected when evaluating the policy. | 1.0 |
-| <span class="opa-keep-it-together">`ctx_addr opa_eval_ctx_new(void)`</span> | Returns the address of a newly allocated evaluation context. | 1.0 |
-| <span class="opa-keep-it-together">`void opa_eval_ctx_set_input(ctx_addr, value_addr)`</span> | Set the input value to use during evaluation. This must be called before each `eval()` call. If the input value is not set before evaluation, references to the `input` document result produce no results (i.e., they are undefined.) | 1.0 |
-| <span class="opa-keep-it-together">`void opa_eval_ctx_set_data(ctx_addr, value_addr)`</span>  | Set the data value to use during evalutaion. This should be called before each `eval()` call. If the data value is not set before evalutaion, references to base `data` documents produce no results (i.e., they are undefined.) | 1.0 |
-| <span class="opa-keep-it-together">`void opa_eval_ctx_set_entrypoint(ctx_addr, entrypoint_id)`</span>  | Set the entrypoint to evaluate. By default, entrypoint with id `0` is evaluated. | 1.0 |
-| <span class="opa-keep-it-together">`value_addr opa_eval_ctx_get_result(ctx_addr)`</span> | Get the result set produced by the evaluation process. | 1.0 |
-| <span class="opa-keep-it-together">`addr opa_malloc(int32 size)`</span> | Allocates size bytes in the shared memory and returns the starting address. | 1.0 |
-| <span class="opa-keep-it-together">`void opa_free(addr)`</span> | Free a pointer. Calls `opa_abort` on error. | 1.0 |
-| <span class="opa-keep-it-together">`value_addr opa_json_parse(str_addr, size)`</span> | Parses the JSON serialized value starting at str_addr of size bytes and returns the address of the parsed value. The parsed value may refer to a null, boolean, number, string, array, or object value. | 1.0 |
-| <span class="opa-keep-it-together">`value_addr opa_value_parse(str_addr, size)`</span> | The same as `opa_json_parse` except Rego set literals are supported. | 1.0 |
-| <span class="opa-keep-it-together">`str_addr opa_json_dump(value_addr)`</span> | Dumps the value referred to by `value_addr` to a null-terminated JSON serialized string and returns the address of the start of the string. Rego sets are serialized as JSON arrays. Non-string Rego object keys are serialized as strings. | 1.0 |
-| <span class="opa-keep-it-together">`str_addr opa_value_dump(value_addr)`</span> | The same as `opa_json_dump` except Rego sets are serialized using the literal syntax and non-string Rego object keys are not serialized as strings. | 1.0 |
-| <span class="opa-keep-it-together">`void opa_heap_ptr_set(addr)`</span> | Set the heap pointer for the next evaluation. | 1.0 |
-| <span class="opa-keep-it-together">`addr opa_heap_ptr_get(void)`</span> | Get the current heap pointer. | 1.0 |
-| <span class="opa-keep-it-together">`int32 opa_value_add_path(base_value_addr, path_value_addr, value_addr)`</span> | Add the value at the `value_addr` into the object referenced by `base_value_addr` at the given path. The `path_value_addr` must point to an array value with string keys (eg: `["a", "b", "c"]`). Existing values will be updated. On success the value at `value_addr` is no longer owned by the caller, it will be freed with the base value. The path must be freed by the caller after use (see `opa_free`). If an error occurs the base value will remain unchanged. Example: base object `{"a": {"b": 123}}`, path `["a", "x", "y"]`, and value `{"foo": "bar"}` will yield `{"a": {"b": 123, "x": {"y": {"foo": "bar"}}}}`. Returns an error code (see below). | 1.0 |
-| <span class="opa-keep-it-together">`int32 opa_value_remove_path(base_value_addr, path_value_addr)`</span> | Remove the value from the object referenced by `base_value_addr` at the given path. Values removed will be freed. The path must be freed by the caller after use (see `opa_free`). The `path_value_addr` must point to an array value with string keys (eg: `["a", "b", "c"]`). Returns an error code (see below). | 1.0 |
-| <span class="opa-keep-it-together">`str_addr opa_eval(_ addr, entrypoint_id int32, data value_addr, input str_addr, input_len int32, heap_ptr addr, format int32)`</span> | One-off policy evaluation method. Its arguments are everything needed to evaluate: entrypoint, address of data in memory, address and length of input JSON string in memory, heap address to use, and the output format (`0` is JSON, `1` is "value", i.e. serialized Rego values). The first argument is reserved for future use and must be `0`. Returns the address to the serialised result value. | 1.2 |
+| `eval` | <div>`int32 eval(ctx_addr)`</div><div>Evaluates the loaded policy with the provided evaluation context. The return value is reserved for future use. </div> | 1.0 |
+| `builtins` | <div>`value_addr builtins(void)`</div><div>Returns the address of a mapping of built-in function names to numeric identifiers that are required by the policy. </div> | 1.0 |
+| `entrypoints` | <div>`value_addr entrypoints(void)`</div><div>Returns the address of a mapping of entrypoints to numeric identifiers that can be selected when evaluating the policy. </div> | 1.0 |
+| `opa_eval_ctx_new` | <div>`ctx_addr opa_eval_ctx_new(void)`</div><div>Returns the address of a newly allocated evaluation context. </div> | 1.0 |
+| `opa_eval_ctx_set_input` | <div>`void opa_eval_ctx_set_input(ctx_addr, value_addr)`</div><div>Set the input value to use during evaluation. This must be called before each `eval()` call. If the input value is not set before evaluation, references to the `input` document result produce no results (i.e., they are undefined.) </div> | 1.0 |
+| `opa_eval_ctx_set_data` | <div>`void opa_eval_ctx_set_data(ctx_addr, value_addr)` </div><div>Set the data value to use during evaluation. This should be called before each `eval()` call. If the data value is not set before evaluation, references to base `data` documents produce no results (i.e., they are undefined.) </div> | 1.0 |
+| `opa_eval_ctx_set_entrypoint` | <div>`void opa_eval_ctx_set_entrypoint(ctx_addr, entrypoint_id)` </div><div>Set the entrypoint to evaluate. By default, entrypoint with id `0` is evaluated. </div> | 1.0 |
+| `opa_eval_ctx_get_result` | <div>`value_addr opa_eval_ctx_get_result(ctx_addr)`</div><div>Get the result set produced by the evaluation process. </div> | 1.0 |
+| `opa_malloc` | <div>`addr opa_malloc(int32 size)`</div><div>Allocates size bytes in the shared memory and returns the starting address. </div> | 1.0 |
+| `opa_free` | <div>`void opa_free(addr)`</div><div>Free a pointer. Calls `opa_abort` on error. </div> | 1.0 |
+| `opa_json_parse` | <div>`value_addr opa_json_parse(str_addr, size)`</div><div>Parses the JSON serialized value starting at str_addr of size bytes and returns the address of the parsed value. The parsed value may refer to a null, boolean, number, string, array, or object value. </div> | 1.0 |
+| `opa_value_parse` | <div>`value_addr opa_value_parse(str_addr, size)`</div><div>The same as `opa_json_parse` except Rego set literals are supported. </div> | 1.0 |
+| `opa_json_dump` | <div>`str_addr opa_json_dump(value_addr)`</div><div>Dumps the value referred to by `value_addr` to a null-terminated JSON serialized string and returns the address of the start of the string. Rego sets are serialized as JSON arrays. Non-string Rego object keys are serialized as strings. </div> | 1.0 |
+| `opa_value_dump` | <div>`str_addr opa_value_dump(value_addr)`</div><div>The same as `opa_json_dump` except Rego sets are serialized using the literal syntax and non-string Rego object keys are not serialized as strings. </div> | 1.0 |
+| `opa_heap_ptr_set` | <div>`void opa_heap_ptr_set(addr)`</div><div>Set the heap pointer for the next evaluation. </div> | 1.0 |
+| `opa_heap_ptr_get` | <div>`addr opa_heap_ptr_get(void)`</div><div>Get the current heap pointer. </div> | 1.0 |
+| `opa_value_add_path` | <div>`int32 opa_value_add_path(base_value_addr, path_value_addr, value_addr)`</div><div>Add the value at the `value_addr` into the object referenced by `base_value_addr` at the given path. The `path_value_addr` must point to an array value with string keys (eg: `["a", "b", "c"]`). Existing values will be updated. On success the value at `value_addr` is no longer owned by the caller, it will be freed with the base value. The path value must be freed by the caller after use by calling `opa_value_free`. (The original path string passed to `opa_json_parse` or `opa_value_parse` to create the value must be freed by calling `opa_free`.) If an error occurs the base value will remain unchanged. Example: base object `{"a": {"b": 123}}`, path `["a", "x", "y"]`, and value `{"foo": "bar"}` will yield `{"a": {"b": 123, "x": {"y": {"foo": "bar"}}}}`. Returns an error code (see below). </div> | 1.0 |
+| `opa_value_remove_path` | <div>`int32 opa_value_remove_path(base_value_addr, path_value_addr)`</div><div>Remove the value from the object referenced by `base_value_addr` at the given path. Values removed will be freed. The path value must be freed by the caller after use by calling `opa_value_free`. (The original path string parsed by `opa_json_parse` or `opa_value_parse` must be released using `opa_free`.) The `path_value_addr` must point to an array value with string keys (eg: `["a", "b", "c"]`). Returns an error code (see below). </div> | 1.0 |
+| `opa_value_free` | <div>`void opa_value_free(value_addr)`</div><div>Free a value such as one generated by `opa_value_parse` or `opa_json_parse` reference at `value_addr`</div> | 1.3 |
+| `opa_heap_blocks_stash` | <div>`void opa_heap_blocks_stash(void)`</div><div>Stash free heap blocks in a shadow heap to enable `eval` or `opa_eval` to allocate only blocks that it can subsequently free with a call to `opa_heap_ptr_set`.  The caller should subsequently call `opa_heap_ptr_get` and store the value to save before calling `opa_heap_bloks_restore`</div> | 1.3 |
+| `opa_heap_blocks_restore` | <div>`void opa_heap_blocks_restore(void)`</div><div>Restore heap blocks stored by `opa_heap_blocks_stash` to the heap.  This should only be called after a `opa_heap_ptr_set` to the a heap pointer recorded by `opa_heap_ptr_get` after the previous call to `opa_heap_blocks_stash`.</div> | 1.3 |
+| `opa_heap_stash_clear` | <div>`void opa_heap_stash_clear(void)`</div><div>Drop all heap blocks saved by `opa_heap_blocks_stash`.  This leaks memory in the VM unless the caller subsquently invokes `opa_heap_ptr_set` to a value taken prior to calling `opa_heap_blocks_stash`. (see below)</div> | 1.3 |
+| `opa_eval` | <div>`str_addr opa_eval(_ addr, entrypoint_id int32, data value_addr, input str_addr, input_len int32, heap_ptr addr, format int32)`</div><div>One-off policy evaluation method. Its arguments are everything needed to evaluate: entrypoint, address of data in memory, address and length of input JSON string in memory, heap address to use, and the output format (`0` is JSON, `1` is "value", i.e. serialized Rego values). The first argument is reserved for future use and must be `0`. Returns the address to the serialised result value. </div> | 1.2 |
 
 The addresses passed and returned by the policy modules are 32-bit integer
 offsets into the shared memory region. The `value_addr` parameters and return
@@ -257,7 +263,7 @@ The (optional) `input` document for a policy can be provided by loading a JSON
  returned address. After the raw string is loaded into memory you will need to
  call the `opa_json_parse` exported method to get an address to the parsed input
  document for use in evaluations. Set the address via the
- `opa_eval_ctx_set_input` exported functoin supplying the evaluation context
+ `opa_eval_ctx_set_input` exported function supplying the evaluation context
  address and parsed input document address.
 
 #### External Data
@@ -276,6 +282,61 @@ the current point in the heap before evaluation. After evaluation this should be
 reset by calling `opa_heap_ptr_set` to ensure that evaluation restarts back at the
 saved data and re-uses heap space. This is particularly important if re-evaluating many
 times with the same data.
+
+If you want to continue to update data in between query evaluations then the calling
+convention is a little more sophisticated due to the way that `eval` and `opa_eval`
+release temporary memory between queries.  The functions `opa_heap_blocks_stash` and
+`opa_heap_blocks_restore` provide a safe way to stash free heap memory during queries
+and then restore it for use when adding or removing further external data. Without
+using these, the `eval` and `opa_eval` calls will leak all heap blocks below the
+heap pointer.  The calling convention is as follows:
+
+* It's always prudent at VM initialization to call `opa_malloc` with a size of 0
+and then `opa_heap_ptr_get` to obtain the initial value of the heap pointer for the
+VM.  Call this the "initial heap pointer".
+* If you never load external data, you can use the "initial heap pointer" as your
+"data heap pointer" for calls to `eval` or `opa_eval`.
+* On the first load of external data, after calling `opa_heap_ptr_get` also call
+`opa_heap_blocks_stash`. This will save free heap memory for reuse later and prevent
+calls to `eval` or `opa_eval` from leaking that memory. Call the saved heap pointer
+after the initial data document load the "data heap pointer".  This "data heap 
+pointer" is the value that should be used in `eval` or `opa_eval` calls.
+* On subsequent calls to modify the data document using `opa_value_add_path` or
+`opa_value_remove_path`, do the following:
+    1. Call `opa_heap_ptr_set` passing the "data heap pointer" to reset the heap
+       and clear any memory left from `eval` or `opa_eval` calls.
+    2. Call `opa_heap_blocks_restore` to reinstate the heap stashed heap memory.
+    3. Call `opa_malloc`/`opa_json_parse`/`opa_free` to create the "path" and
+       "value" arguments (in WASM value form) as usual.
+    4. Call `opa_value_add_path` or `opa_value_remove_path` as usual.
+    5. Call `opa_value_free` on the "path" argument to release it as usual.
+    6. Call `opa_value_blocks_stash` to stash any free heap blocks to
+       protect them during `eval` or `opa_eval` calls.
+    7. Call `opa_heap_ptr_get` to get a new "data heap pointer".  It may
+       be larger or smaller than the previous value depending upon which
+       internal memory the calls allocated or released.
+* The calling convention for `eval` and `opa_eval` don't change at all.
+* If, at any point, you wish to reset the VM to an initial state with regard
+  to the policy data then do the following:
+    1. Call `opa_heap_stash_clear` to drop all stashed heap blocks (if any).
+    2. Call `opa_heap_ptr_set` with the "initial heap pointer" to reset the
+       heap to its initial state.
+    3. Use the "initial heap pointer" as your new "data heap pointer" until
+       the next time you add external data in the VM.
+
+It might seem counter-intuitive to hide available heap memory from calls
+to `eval` or `opa_eval`. But that memory was never truly available for
+queries in the first place.  The very first call to `opa_heap_ptr_set`
+(either before `eval` or which `opa_eval` calls internally) resets the heap
+and leaks any free blocks on the heap.  In versions of the ABI prior to
+1.3 this memory was simply lost.  Note, however, that multiple queries
+would not continue to leak memory since they would always reset the heap
+pointer to the same value.  The WASM engine would only leak further
+memory if there were subsequent calls to `opa_value_add_path` or
+`opa_value_remove_path` followed by more queries.  ABI 1.3 introduced the
+calling convention using `opa_heap_blocks_stash` and
+`opa_heap_blocks_restore` to allow for interleaving query evaluations
+with incremental data document modifications.
 
 #### Entrypoints
 

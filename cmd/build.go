@@ -27,6 +27,7 @@ type buildParams struct {
 	capabilities       *capabilitiesFlag
 	target             *util.EnumFlag
 	bundleMode         bool
+	pruneUnused        bool
 	optimizationLevel  int
 	entrypoints        repeatedStringFlag
 	outputFile         string
@@ -46,7 +47,7 @@ type buildParams struct {
 func newBuildParams() buildParams {
 	return buildParams{
 		capabilities: newcapabilitiesFlag(),
-		target:       util.NewEnumFlag(compile.TargetRego, []string{compile.TargetRego, compile.TargetWasm}),
+		target:       util.NewEnumFlag(compile.TargetRego, compile.Targets),
 	}
 }
 
@@ -85,9 +86,10 @@ Inside another terminal in the same directory, serve the bundle via HTTP:
 
     $ python3 -m http.server --bind localhost 8080
 
-For more information on bundles see https://www.openpolicyagent.org/docs/latest/management.
+For more information on bundles see https://www.openpolicyagent.org/docs/latest/management-bundles/.
 
-## Common Flags
+Common Flags
+------------
 
 When -b is specified the 'build' command assumes paths refer to existing bundle files
 or directories following the bundle structure. If multiple bundles are provided, their
@@ -107,17 +109,26 @@ The 'build' command supports targets (specified by -t):
     rego    The default target emits a bundle containing a set of policy and data files
             that are semantically equivalent to the input files. If optimizations are
             disabled the output may simply contain a copy of the input policy and data
-            files. If optimization is enabled at least one entrypoint (-e) must be supplied.
+            files. If optimization is enabled at least one entrypoint must be supplied,
+            either via the -e option, or via entrypoint metadata annotations.
 
     wasm    The wasm target emits a bundle containing a WebAssembly module compiled from
             the input files for each specified entrypoint. The bundle may contain the
             original policy or data files.
 
-The -e flag tells the 'build' command which documents will be queried by the software
-asking for policy decisions, so that it can focus optimization efforts and ensure
-that document is not eliminated by the optimizer.
+    plan    The plan target emits a bundle containing a plan, i.e., an intermediate
+            representation compiled from the input files for each specified entrypoint.
+            This is for further processing, OPA cannot evaluate a "plan bundle" like it
+            can evaluate a wasm or rego bundle.
 
-## Signing
+The -e flag tells the 'build' command which documents (entrypoints) will be queried by 
+the software asking for policy decisions, so that it can focus optimization efforts and 
+ensure that document is not eliminated by the optimizer.
+Note: Unless the --prune-unused flag is used, any rule transitively referring to a 
+package or rule declared as an entrypoint will also be enumerated as an entrypoint.
+
+Signing
+-------
 
 The 'build' command can be used to verify the signature of a signed bundle and
 also to generate a signature for the output bundle the command creates.
@@ -126,8 +137,8 @@ If the directory path(s) provided to the 'build' command contain a ".signatures.
 it will attempt to verify the signatures included in that file. The bundle files
 or directory path(s) to verify must be specified using --bundle.
 
-For more information on the bundle verification process see
-https://www.openpolicyagent.org/docs/latest/management/#signature-verification.
+For more information on the bundle signing and verification, see
+https://www.openpolicyagent.org/docs/latest/management-bundles/#signing.
 
 Example:
 
@@ -161,9 +172,10 @@ To include additional claims in the payload use the --claims-file flag to provid
 containing optional claims.
 
 For more information on the format of the ".signatures.json" file
-see https://www.openpolicyagent.org/docs/latest/management/#signature-format.
+see https://www.openpolicyagent.org/docs/latest/management-bundles/#signature-format.
 
-## Capabilities
+Capabilities
+------------
 
 The 'build' command can validate policies against a configurable set of OPA capabilities.
 The capabilities define the built-in functions and other language features that policies
@@ -198,7 +210,7 @@ The OPA repository contains a set of capabilities files for each OPA release. Fo
 the following command builds a directory of policies ('./policies') and validates them
 against OPA v0.22.0:
 
-    opa build ./policies --capabilities $OPA_SRC/capabilities/v0.22.0.json
+    opa build ./policies --capabilities v0.22.0
 `,
 		PreRunE: func(Cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
@@ -215,7 +227,8 @@ against OPA v0.22.0:
 	}
 
 	buildCommand.Flags().VarP(buildParams.target, "target", "t", "set the output bundle target type")
-	buildCommand.Flags().BoolVarP(&buildParams.debug, "debug", "", false, "enable debug output")
+	buildCommand.Flags().BoolVar(&buildParams.pruneUnused, "prune-unused", false, "exclude dependents of entrypoints")
+	buildCommand.Flags().BoolVar(&buildParams.debug, "debug", false, "enable debug output")
 	buildCommand.Flags().IntVarP(&buildParams.optimizationLevel, "optimize", "O", 0, "set optimization level")
 	buildCommand.Flags().VarP(&buildParams.entrypoints, "entrypoint", "e", "set slash separated entrypoint path")
 	buildCommand.Flags().VarP(&buildParams.revision, "revision", "r", "set output bundle revision")
@@ -250,13 +263,15 @@ func dobuild(params buildParams, args []string) error {
 		return err
 	}
 
-	bsc := buildSigningConfig(params.key, params.algorithm, params.claimsFile, params.plugin)
-
-	if bvc != nil || bsc != nil {
-		if !params.bundleMode {
-			return fmt.Errorf("enable bundle mode (ie. --bundle) to verify or sign bundle files or directories")
-		}
+	bsc, err := buildSigningConfig(params.key, params.algorithm, params.claimsFile, params.plugin)
+	if err != nil {
+		return err
 	}
+
+	if (bvc != nil || bsc != nil) && !params.bundleMode {
+		return fmt.Errorf("enable bundle mode (ie. --bundle) to verify or sign bundle files or directories")
+	}
+
 	var capabilities *ast.Capabilities
 	// if capabilities are not provided as a cmd flag,
 	// then ast.CapabilitiesForThisVersion must be called
@@ -266,13 +281,16 @@ func dobuild(params buildParams, args []string) error {
 	} else {
 		capabilities = ast.CapabilitiesForThisVersion()
 	}
+
 	compiler := compile.New().
 		WithCapabilities(capabilities).
 		WithTarget(params.target.String()).
 		WithAsBundle(params.bundleMode).
+		WithPruneUnused(params.pruneUnused).
 		WithOptimizationLevel(params.optimizationLevel).
 		WithOutput(buf).
 		WithEntrypoints(params.entrypoints.v...).
+		WithRegoAnnotationEntrypoints(true).
 		WithPaths(args...).
 		WithFilter(buildCommandLoaderFilter(params.bundleMode, params.ignore)).
 		WithBundleVerificationConfig(bvc).
@@ -288,6 +306,10 @@ func dobuild(params buildParams, args []string) error {
 
 	if params.claimsFile == "" {
 		compiler = compiler.WithBundleVerificationKeyID(params.pubKeyID)
+	}
+
+	if params.target.String() == compile.TargetPlan {
+		compiler = compiler.WithEnablePrintStatements(true)
 	}
 
 	err = compiler.Build(context.Background())
@@ -331,10 +353,12 @@ func buildVerificationConfig(pubKey, pubKeyID, alg, scope string, excludeFiles [
 	return bundle.NewVerificationConfig(map[string]*keys.Config{pubKeyID: keyConfig}, pubKeyID, scope, excludeFiles), nil
 }
 
-func buildSigningConfig(key, alg, claimsFile, plugin string) *bundle.SigningConfig {
-	if key == "" {
-		return nil
+func buildSigningConfig(key, alg, claimsFile, plugin string) (*bundle.SigningConfig, error) {
+	if key == "" && (plugin != "" || claimsFile != "") {
+		return nil, errSigningConfigIncomplete
 	}
-
-	return bundle.NewSigningConfig(key, alg, claimsFile).WithPlugin(plugin)
+	if key == "" {
+		return nil, nil
+	}
+	return bundle.NewSigningConfig(key, alg, claimsFile).WithPlugin(plugin), nil
 }

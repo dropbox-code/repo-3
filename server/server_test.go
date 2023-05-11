@@ -7,24 +7,33 @@ package server
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"reflect"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/pkg/errors"
+	"github.com/open-policy-agent/opa/internal/prometheus"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/propagation"
 
 	"github.com/open-policy-agent/opa/ast"
 	"github.com/open-policy-agent/opa/bundle"
 	"github.com/open-policy-agent/opa/config"
+	"github.com/open-policy-agent/opa/internal/distributedtracing"
+	"github.com/open-policy-agent/opa/logging"
 	"github.com/open-policy-agent/opa/metrics"
 	"github.com/open-policy-agent/opa/plugins"
 	pluginBundle "github.com/open-policy-agent/opa/plugins/bundle"
@@ -32,9 +41,13 @@ import (
 	"github.com/open-policy-agent/opa/server/authorizer"
 	"github.com/open-policy-agent/opa/server/identifier"
 	"github.com/open-policy-agent/opa/server/types"
+	"github.com/open-policy-agent/opa/server/writer"
 	"github.com/open-policy-agent/opa/storage"
+	"github.com/open-policy-agent/opa/storage/disk"
 	"github.com/open-policy-agent/opa/storage/inmem"
+	"github.com/open-policy-agent/opa/tracing"
 	"github.com/open-policy-agent/opa/util"
+	"github.com/open-policy-agent/opa/util/test"
 	"github.com/open-policy-agent/opa/version"
 )
 
@@ -842,6 +855,10 @@ func TestCompileV1(t *testing.T) {
 	default r = true
 
 	r { input.x = 1 }
+
+	custom_func(x) { data.a[i] == x }
+
+	s { custom_func(input.x) }
 	`
 
 	expQuery := func(s string) string {
@@ -913,6 +930,34 @@ func TestCompileV1(t *testing.T) {
 			},
 		},
 		{
+			note: "function without disableInlining",
+			trs: []tr{
+				{http.MethodPut, "/policies/test", mod, 200, ""},
+				{http.MethodPost, "/compile", `{
+					"unknowns": ["data.a"],
+					"query": "data.test.s = true",
+					"input": { "x": 1 }
+				}`, 200, expQuery("data.a[i2] = 1")},
+			},
+		},
+		{
+			note: "function with disableInlining",
+			trs: []tr{
+				{http.MethodPut, "/policies/test", mod, 200, ""},
+				{http.MethodPost, "/compile", `{
+					"unknowns": ["data.a"],
+					"query": "data.test.s = true",
+					"options": { "disableInlining": ["data.test"] },
+					"input": { "x": 1 }
+				}`, 200, expQueryAndSupport(
+					`data.partial.test.s = true`,
+					`package partial.test
+					s { data.partial.test.custom_func(1) }
+					custom_func(__local0__2) { data.a[i2] = __local0__2 }
+					`)},
+			},
+		},
+		{
 			note: "empty unknowns",
 			trs: []tr{
 				{http.MethodPost, "/compile", `{"query": "input.x > 1", "unknowns": []}`, 200, `{"result": {}}`},
@@ -956,35 +1001,49 @@ func TestCompileV1(t *testing.T) {
 }
 
 func TestCompileV1Observability(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	test.WithTempFS(nil, func(root string) {
+		disk, err := disk.New(ctx, logging.NewNoOpLogger(), nil, disk.Options{Dir: root})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer disk.Close(ctx)
+		f := newFixtureWithStore(t, disk)
 
-	f := newFixture(t)
-
-	err := f.v1(http.MethodPut, "/policies/test", `package test
+		err = f.v1(http.MethodPut, "/policies/test", `package test
 
 	p { input.x = 1 }`, 200, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+		if err != nil {
+			t.Fatal(err)
+		}
 
-	compileReq := newReqV1(http.MethodPost, "/compile?metrics&explain=full", `{
+		compileReq := newReqV1(http.MethodPost, "/compile?metrics&explain=full", `{
 		"query": "data.test.p = true"
 	}`)
 
-	f.reset()
-	f.server.Handler.ServeHTTP(f.recorder, compileReq)
+		f.reset()
+		f.server.Handler.ServeHTTP(f.recorder, compileReq)
 
-	var response types.CompileResponseV1
-	if err := json.NewDecoder(f.recorder.Body).Decode(&response); err != nil {
-		t.Fatal(err)
-	}
+		var response types.CompileResponseV1
+		if err := json.NewDecoder(f.recorder.Body).Decode(&response); err != nil {
+			t.Fatal(err)
+		}
 
-	if len(response.Explanation) == 0 {
-		t.Fatal("Expected non-empty explanation")
-	}
+		if len(response.Explanation) == 0 {
+			t.Fatal("Expected non-empty explanation")
+		}
 
-	if _, ok := response.Metrics["timer_rego_partial_eval_ns"]; !ok {
-		t.Fatal("Expected partial evaluation latency")
-	}
+		assertMetricsExist(t, response.Metrics, []string{
+			"timer_rego_partial_eval_ns",
+			"timer_rego_query_compile_ns",
+			"timer_rego_query_parse_ns",
+			"timer_rego_module_parse_ns",
+			"timer_server_handler_ns",
+			"counter_disk_read_keys",
+			"timer_disk_read_ns",
+		})
+	})
 }
 
 func TestCompileV1UnsafeBuiltin(t *testing.T) {
@@ -1140,12 +1199,22 @@ p = true { false }`
 		}},
 		{"patch root", []tr{
 			{http.MethodPatch, "/data", `[
-				{"op": "add",
-				 "path": "/",
-				 "value": {"a": 1, "b": 2}
+				{
+					"op": "add",
+					"path": "/",
+					"value": {"a": 1, "b": 2}
 				}
 			]`, 204, ""},
 			{http.MethodGet, "/data", "", 200, `{"result": {"a": 1, "b": 2}}`},
+		}},
+		{"patch root invalid", []tr{
+			{http.MethodPatch, "/data", `[
+				{
+					"op": "add",
+					"path": "/",
+					"value": [1,2,3]
+				}
+			]`, 400, ""},
 		}},
 		{"patch invalid", []tr{
 			{http.MethodPatch, "/data", `[
@@ -1275,9 +1344,26 @@ p = true { false }`
 			{http.MethodGet, "/data", "", 200, `{"result": {"testmod": {"p": [1,2,3,4], "q": {"a":1, "b": 2}}, "x": [1,2,3,4]}}`},
 		}},
 		{"post root", []tr{
-			{http.MethodPost, "/data", "", 200, `{"result": {}}`},
+			{http.MethodPost, "/data", "", 200, `{
+				"result": {},
+				"warning": {
+					"code": "api_usage_warning",
+					"message": "'input' key missing from the request"
+				}
+			}`},
 			{http.MethodPut, "/policies/test", testMod2, 200, ""},
-			{http.MethodPost, "/data", "", 200, `{"result": {"testmod": {"p": [1,2,3,4], "q": {"b": 2, "a": 1}}}}`},
+			{http.MethodPost, "/data", "", 200, `{
+				"result": {
+					"testmod": {
+						"p": [1,2,3,4],
+						"q": {"b": 2, "a": 1}
+					}
+				},
+				"warning": {
+					"code": "api_usage_warning",
+					"message": "'input' key missing from the request"
+				}
+			}`},
 		}},
 		{"post input", []tr{
 			{http.MethodPut, "/policies/test", testMod1, 200, ""},
@@ -1290,7 +1376,13 @@ p = true { false }`
 			}`},
 		}},
 		{"post empty object", []tr{
-			{http.MethodPost, "/data", `{}`, 200, `{"result": {}}`},
+			{http.MethodPost, "/data", `{}`, 200, `{
+				"result": {},
+				"warning": {
+					"code": "api_usage_warning",
+					"message": "'input' key missing from the request"
+				}
+			}`},
 		}},
 		{"post partial", []tr{
 			{http.MethodPut, "/policies/test", testMod7, 200, ""},
@@ -1313,9 +1405,20 @@ p = true { false }`
 		}},
 		{"partial invalidate data", []tr{
 			{http.MethodPut, "/policies/test", testMod8, 200, ""},
-			{http.MethodPost, "/data/testmod/p?partial", "", 200, `{}`},
+			{http.MethodPost, "/data/testmod/p?partial", "", 200, `{
+				"warning": {
+					"code": "api_usage_warning",
+					"message": "'input' key missing from the request"
+				}
+			}`},
 			{http.MethodPut, "/data/x", `1`, 204, ""},
-			{http.MethodPost, "/data/testmod/p?partial", "", 200, `{"result": true}`},
+			{http.MethodPost, "/data/testmod/p?partial", "", 200, `{
+				"result": true,
+				"warning": {
+					"code": "api_usage_warning",
+					"message": "'input' key missing from the request"
+				}
+			}`},
 		}},
 		{"partial ineffective fallback to normal", []tr{
 			{http.MethodPut, "/policies/test", testMod7, 200, ""},
@@ -1326,6 +1429,10 @@ p = true { false }`
 					"q": [],
 					"r": []
 					}
+				},
+				"warning": {
+					"code": "api_usage_warning",
+					"message": "'input' key missing from the request"
 				}
 			}`},
 			{http.MethodPost, "/data", "", 200, `{
@@ -1335,6 +1442,10 @@ p = true { false }`
 					"q": [],
 					"r": []
 					}
+				},
+				"warning": {
+					"code": "api_usage_warning",
+					"message": "'input' key missing from the request"
 				}
 			}`},
 		}},
@@ -1382,10 +1493,32 @@ p = true { false }`
 			{http.MethodGet, "/data", "", 200, `{"result": {"a/b": {"c/d": 1}}}`},
 			{http.MethodGet, "/data/a%2Fb/c%2Fd", "", 200, `{"result": 1}`},
 			{http.MethodGet, "/data/a/b", "", 200, `{}`},
-			{http.MethodPost, "/data/a%2Fb/c%2Fd", "", 200, `{"result": 1}`},
-			{http.MethodPost, "/data/a/b", "", 200, `{}`},
+			{http.MethodPost, "/data/a%2Fb/c%2Fd", "", 200, `{
+				"result": 1,
+				"warning": {
+					"code": "api_usage_warning",
+					"message": "'input' key missing from the request"
+				}
+			}`},
+			{http.MethodPost, "/data/a/b", "", 200, `{
+				"warning": {
+					"code": "api_usage_warning",
+					"message": "'input' key missing from the request"
+				}
+			}`},
 			{http.MethodPatch, "/data/a%2Fb", `[{"op": "add", "path": "/e%2Ff", "value": 2}]`, 204, ""},
-			{http.MethodPost, "/data", "", 200, `{"result": {"a/b": {"c/d": 1, "e/f": 2}}}`},
+			{http.MethodPost, "/data", "", 200, `{
+				"result": {
+					"a/b": {
+						"c/d": 1,
+						"e/f": 2
+					}
+				},
+				"warning": {
+					"code": "api_usage_warning",
+					"message": "'input' key missing from the request"
+				}
+			}`},
 		}},
 		{"strict-builtin-errors", []tr{
 			{http.MethodPut, "/policies/test", `
@@ -1411,7 +1544,13 @@ p = true { false }`
 				  }
 				]
 			  }`},
-			{http.MethodPost, "/data/test/p", "", 200, `{"result": false}`},
+			{http.MethodPost, "/data/test/p", "", 200, `{
+				"result": false,
+				"warning": {
+					"code": "api_usage_warning",
+					"message": "'input' key missing from the request"
+				}
+			}`},
 			{http.MethodPost, "/data/test/p?strict-builtin-errors", "", 500, `{
 				"code": "internal_error",
 				"message": "error(s) occurred while evaluating query",
@@ -1428,13 +1567,77 @@ p = true { false }`
 				]
 			  }`},
 		}},
+		{"post api usage warning", []tr{
+			{http.MethodPost, "/data", "", 200, `{
+				"result": {},
+				"warning": {
+					"code": "api_usage_warning",
+					"message": "'input' key missing from the request"
+				}
+			}`},
+			{http.MethodPost, "/data", `{"input": {}}`, 200, `{"result": {}}`},
+		}},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.note, func(t *testing.T) {
-			executeRequests(t, tc.reqs)
+			test.WithTempFS(nil, func(root string) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				disk, err := disk.New(ctx, logging.NewNoOpLogger(), nil, disk.Options{Dir: root})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer disk.Close(ctx)
+				executeRequests(t, tc.reqs,
+					variant{"inmem", nil},
+					variant{"disk", []func(*Server){
+						func(s *Server) {
+							s.WithStore(disk)
+						},
+					}},
+				)
+			})
 		})
 	}
+}
+
+func TestDataV1Metrics(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	test.WithTempFS(nil, func(root string) {
+		disk, err := disk.New(ctx, logging.NewNoOpLogger(), nil, disk.Options{Dir: root})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer disk.Close(ctx)
+
+		f := newFixtureWithStore(t, disk)
+		put := newReqV1(http.MethodPut, `/data?metrics`, `{"foo":"bar"}`)
+		f.server.Handler.ServeHTTP(f.recorder, put)
+
+		if f.recorder.Code != 200 {
+			t.Fatalf("Expected success but got %v", f.recorder)
+		}
+
+		var result types.DataResponseV1
+		err = util.UnmarshalJSON(f.recorder.Body.Bytes(), &result)
+		if err != nil {
+			t.Fatalf("Unexpected error while unmarshalling result: %v", err)
+		}
+
+		assertMetricsExist(t, result.Metrics, []string{
+			"counter_disk_read_keys",
+			"counter_disk_deleted_keys",
+			"counter_disk_written_keys",
+			"counter_disk_read_bytes",
+			"timer_rego_input_parse_ns",
+			"timer_server_handler_ns",
+			"timer_disk_read_ns",
+			"timer_disk_write_ns",
+			"timer_disk_commit_ns",
+		})
+	})
 }
 
 func TestConfigV1(t *testing.T) {
@@ -1564,186 +1767,466 @@ func TestDataPutV1IfNoneMatch(t *testing.T) {
 	}
 }
 
-func TestParsePatchPathEscaped(t *testing.T) {
+func TestDataPostV0CompressedResponse(t *testing.T) {
 	tests := []struct {
-		note         string
-		path         string
-		expectedPath storage.Path
-		expectedOK   bool
+		gzipMinLength      int
+		compressedResponse bool
 	}{
-		// success-path tests
 		{
-			note:         "single-level",
-			path:         "/single-level",
-			expectedPath: storage.Path{"single-level"},
-			expectedOK:   true,
+			gzipMinLength:      3,
+			compressedResponse: true,
 		},
 		{
-			note:         "multi-level",
-			path:         "/a/multi-level/path",
-			expectedPath: storage.Path{"a", "multi-level", "path"},
-			expectedOK:   true,
-		},
-		{
-			note:         "end",
-			path:         "/-",
-			expectedPath: storage.Path{"-"},
-			expectedOK:   true,
-		},
-		{ // not strictly correct but included for backwards compatibility with existing OPA
-			note:         "url-escaped forward slash",
-			path:         "/github.com%2Fopen-policy-agent",
-			expectedPath: storage.Path{"github.com/open-policy-agent"},
-			expectedOK:   true,
-		},
-		{
-			note:         "json-pointer-escaped forward slash",
-			path:         "/github.com~1open-policy-agent",
-			expectedPath: storage.Path{"github.com/open-policy-agent"},
-			expectedOK:   true,
-		},
-		{
-			note:         "json-pointer-escaped tilde",
-			path:         "/~0opa",
-			expectedPath: storage.Path{"~opa"},
-			expectedOK:   true,
-		},
-		{
-			note:         "json-pointer-escape correctness",
-			path:         "/~01",
-			expectedPath: storage.Path{"~1"},
-			expectedOK:   true,
-		},
-
-		// failure-path tests
-		{ // not possible with existing callers but for completeness...
-			note:       "empty string",
-			path:       "",
-			expectedOK: false,
-		},
-		{ // not possible with existing callers but for completeness...
-			note:       "string that doesn't start with /",
-			path:       "foo",
-			expectedOK: false,
+			gzipMinLength:      1400,
+			compressedResponse: false,
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.note, func(t *testing.T) {
-			actualPath, actualOK := parsePatchPathEscaped(tc.path)
+	for _, test := range tests {
+		f := newFixtureWithConfig(t, fmt.Sprintf(`{"server":{"encoding":{"gzip":{"min_length": %d}}}}`, test.gzipMinLength))
+		// create the policy
+		err := f.v1(http.MethodPut, "/policies/test", `package opa.examples
+import input.example.flag
+allow_request { flag == true }
+`, 200, "")
+		if err != nil {
+			t.Fatal(err)
+		}
 
-			if tc.expectedOK != actualOK {
-				t.Fatalf("Expected ok to be %v but was %v", tc.expectedOK, actualOK)
-			}
+		// execute the request
+		req := newReqV0(http.MethodPost, "/data/opa/examples/allow_request", `{"example": {"flag": true}}`)
+		req.Header.Set("Accept-Encoding", "gzip")
+		f.reset()
+		f.server.Handler.ServeHTTP(f.recorder, req)
 
-			if !reflect.DeepEqual(tc.expectedPath, actualPath) {
-				t.Fatalf("Expected path to be %v but was %v", tc.expectedPath, actualPath)
+		// check for content encoding
+		expectedEncoding := "gzip"
+		if !test.compressedResponse {
+			expectedEncoding = ""
+		}
+		receivedEncodingHeaderValue := f.recorder.Header().Get("Content-Encoding")
+		if receivedEncodingHeaderValue != expectedEncoding {
+			t.Fatalf("Expected Content-Encoding %v but got: %v", expectedEncoding, receivedEncodingHeaderValue)
+		}
+
+		var plainOutput []byte
+		if test.compressedResponse {
+			// unzip the response
+			gzReader, err := gzip.NewReader(f.recorder.Body)
+			if err != nil {
+				t.Fatalf("Unexpected gzip error: %v", err)
 			}
-		})
+			plainOutput, err = io.ReadAll(gzReader)
+			if err != nil {
+				t.Fatalf("Unexpected error on reading the response: %v", err)
+			}
+		} else {
+			plainOutput = f.recorder.Body.Bytes()
+		}
+
+		expected := "true"
+		result := strings.TrimSuffix(string(plainOutput), "\n")
+		if plainOutput == nil || result != expected {
+			t.Fatalf("Expected %v but got: %v", expected, result)
+		}
+	}
+}
+
+func TestDataPostV1CompressedResponse(t *testing.T) {
+	tests := []struct {
+		gzipMinLength      int
+		compressedResponse bool
+	}{
+		{
+			gzipMinLength:      3,
+			compressedResponse: true,
+		},
+		{
+			gzipMinLength:      1400,
+			compressedResponse: false,
+		},
+	}
+
+	for _, test := range tests {
+		f := newFixtureWithConfig(t, fmt.Sprintf(`{"server":{"encoding":{"gzip":{"min_length": %d}}}}`, test.gzipMinLength))
+		// create the policy
+		err := f.v1(http.MethodPut, "/policies/test", `package test
+default hello := false
+hello {
+	input.message == "world"
+}
+`, 200, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// execute the request
+		req := newReqV1(http.MethodPost, "/data/test", `{"input": {"message": "world"}}`)
+		req.Header.Set("Accept-Encoding", "gzip")
+		f.reset()
+		f.server.Handler.ServeHTTP(f.recorder, req)
+
+		var result types.DataResponseV1
+
+		// check for content encoding
+		expectedEncoding := "gzip"
+		if !test.compressedResponse {
+			expectedEncoding = ""
+		}
+		receivedEncodingHeaderValue := f.recorder.Header().Get("Content-Encoding")
+		if receivedEncodingHeaderValue != expectedEncoding {
+			t.Fatalf("Expected Content-Encoding %v but got: %v", expectedEncoding, receivedEncodingHeaderValue)
+		}
+
+		if test.compressedResponse {
+			// unzip and unmarshall the response
+			gzReader, err := gzip.NewReader(f.recorder.Body)
+			if err != nil {
+				t.Fatalf("Unexpected gzip error: %v", err)
+			}
+			if err := util.NewJSONDecoder(gzReader).Decode(&result); err != nil {
+				t.Fatalf("Unexpected JSON decode error: %v", err)
+			}
+		} else {
+			// unmarshall the response
+			if err := util.NewJSONDecoder(f.recorder.Body).Decode(&result); err != nil {
+				t.Fatalf("Unexpected JSON decode error: %v", err)
+			}
+		}
+
+		var expected interface{}
+		if err := util.UnmarshalJSON([]byte(`{"hello": true}`), &expected); err != nil {
+			panic(err)
+		}
+		if result.Result == nil || !reflect.DeepEqual(*result.Result, expected) {
+			t.Fatalf("Expected %v but got: %v", expected, *result.Result)
+		}
+	}
+}
+
+func TestCompileV1CompressedResponse(t *testing.T) {
+	tests := []struct {
+		gzipMinLength      int
+		compressedResponse bool
+	}{
+		{
+			gzipMinLength:      3,
+			compressedResponse: true,
+		},
+		{
+			gzipMinLength:      1400,
+			compressedResponse: false,
+		},
+	}
+
+	for _, test := range tests {
+		f := newFixtureWithConfig(t, fmt.Sprintf(`{"server":{"encoding":{"gzip":{"min_length": %d}}}}`, test.gzipMinLength))
+
+		// create the policy
+		mod := `package test
+
+	p {
+		input.x = 1
+	}
+
+	q {
+		data.a[i] = input.x
+	}
+
+	default r = true
+
+	r { input.x = 1 }
+
+	custom_func(x) { data.a[i] == x }
+
+	s { custom_func(input.x) }
+	`
+		err := f.v1(http.MethodPut, "/policies/test", mod, 200, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// execute the request
+		req := newReqV1(http.MethodPost, "/compile", `{"unknowns": ["input"], "query": "data.test.p = true"}`)
+		req.Header.Set("Accept-Encoding", "gzip")
+		f.reset()
+		f.server.Handler.ServeHTTP(f.recorder, req)
+
+		var result types.CompileResponseV1
+
+		// check for content encoding
+		expectedEncoding := "gzip"
+		if !test.compressedResponse {
+			expectedEncoding = ""
+		}
+		receivedEncodingHeaderValue := f.recorder.Header().Get("Content-Encoding")
+		if receivedEncodingHeaderValue != expectedEncoding {
+			t.Fatalf("Expected Content-Encoding %v but got: %v", expectedEncoding, receivedEncodingHeaderValue)
+		}
+
+		if test.compressedResponse {
+			// unzip and unmarshall the response
+			gzReader, err := gzip.NewReader(f.recorder.Body)
+			if err != nil {
+				t.Fatalf("Unexpected gzip error: %v", err)
+			}
+			if err := util.NewJSONDecoder(gzReader).Decode(&result); err != nil {
+				t.Fatalf("Unexpected JSON decode error: %v", err)
+			}
+		} else {
+			// unmarshall the response
+			if err := util.NewJSONDecoder(f.recorder.Body).Decode(&result); err != nil {
+				t.Fatalf("Unexpected JSON decode error: %v", err)
+			}
+		}
+
+		var expected interface{}
+		expectedStr := fmt.Sprintf(`{"queries": [%v]}`, string(util.MustMarshalJSON(ast.MustParseBody("input.x = 1"))))
+		if err := util.UnmarshalJSON([]byte(expectedStr), &expected); err != nil {
+			panic(err)
+		}
+
+		if result.Result == nil || !reflect.DeepEqual(*result.Result, expected) {
+			t.Fatalf("Expected %v but got: %v", expected, *result.Result)
+		}
+	}
+}
+
+func TestDataPostV0CompressedRequest(t *testing.T) {
+	f := newFixture(t)
+	// create the policy
+	err := f.v1(http.MethodPut, "/policies/test", `package opa.examples
+import input.example.flag
+allow_request { flag == true }
+`, 200, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// execute the request
+	compressedBoy := zipString(`{"example": {"flag": true}}`)
+	req := newStreamedReqV0(http.MethodPost, "/data/opa/examples/allow_request", bytes.NewReader(compressedBoy))
+	req.Header.Set("Content-Encoding", "gzip")
+	f.reset()
+	f.server.Handler.ServeHTTP(f.recorder, req)
+
+	expected := "true"
+	result := strings.TrimSuffix(f.recorder.Body.String(), "\n")
+	if result != expected {
+		t.Fatalf("Expected %v but got: %v", expected, result)
+	}
+}
+
+func TestDataPostV1CompressedRequest(t *testing.T) {
+	f := newFixture(t)
+	// create the policy
+	err := f.v1(http.MethodPut, "/policies/test", `package test
+default hello := false
+hello {
+	input.message == "world"
+}
+`, 200, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// execute the request
+	compressedBoy := zipString(`{"input": {"message": "world"}}`)
+	req := newStreamedReqV1(http.MethodPost, "/data/test", bytes.NewReader(compressedBoy))
+	req.Header.Set("Content-Encoding", "gzip")
+	f.reset()
+	f.server.Handler.ServeHTTP(f.recorder, req)
+
+	var result types.DataResponseV1
+
+	// unmarshall the response
+	if err := util.NewJSONDecoder(f.recorder.Body).Decode(&result); err != nil {
+		t.Fatalf("Unexpected JSON decode error: %v", err)
+	}
+
+	var expected interface{}
+	if err := util.UnmarshalJSON([]byte(`{"hello": true}`), &expected); err != nil {
+		panic(err)
+	}
+	if result.Result == nil || !reflect.DeepEqual(*result.Result, expected) {
+		t.Fatalf("Expected %v but got: %v", expected, *result.Result)
+	}
+}
+
+func TestCompileV1CompressedRequest(t *testing.T) {
+	f := newFixture(t)
+	// create the policy
+	mod := `package test
+
+	p {
+		input.x = 1
+	}
+
+	q {
+		data.a[i] = input.x
+	}
+
+	default r = true
+
+	r { input.x = 1 }
+
+	custom_func(x) { data.a[i] == x }
+
+	s { custom_func(input.x) }
+	`
+	err := f.v1(http.MethodPut, "/policies/test", mod, 200, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// execute the request
+	compressedBoy := zipString(`{"unknowns": ["input"], "query": "data.test.p = true"}`)
+	req := newStreamedReqV1(http.MethodPost, "/compile", bytes.NewReader(compressedBoy))
+	req.Header.Set("Content-Encoding", "gzip")
+	f.reset()
+	f.server.Handler.ServeHTTP(f.recorder, req)
+
+	var result types.CompileResponseV1
+
+	// unmarshall the response
+	if err := util.NewJSONDecoder(f.recorder.Body).Decode(&result); err != nil {
+		t.Fatalf("Unexpected JSON decode error: %v", err)
+	}
+
+	var expected interface{}
+	expectedStr := fmt.Sprintf(`{"queries": [%v]}`, string(util.MustMarshalJSON(ast.MustParseBody("input.x = 1"))))
+	if err := util.UnmarshalJSON([]byte(expectedStr), &expected); err != nil {
+		panic(err)
+	}
+
+	if result.Result == nil || !reflect.DeepEqual(*result.Result, expected) {
+		t.Fatalf("Expected %v but got: %v", expected, *result.Result)
 	}
 }
 
 func TestBundleScope(t *testing.T) {
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	test.WithTempFS(nil, func(root string) {
+		disk, err := disk.New(ctx, logging.NewNoOpLogger(), nil, disk.Options{Dir: root})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer disk.Close(ctx)
 
-	f := newFixture(t)
+		for _, v := range []variant{
+			{"inmem", nil},
+			{"disk", []func(*Server){func(s *Server) { s.WithStore(disk) }}},
+		} {
+			t.Run(v.name, func(t *testing.T) {
+				f := newFixture(t, v.opts...)
 
-	txn := storage.NewTransactionOrDie(ctx, f.server.store, storage.WriteParams)
+				txn := storage.NewTransactionOrDie(ctx, f.server.store, storage.WriteParams)
 
-	if err := bundle.WriteManifestToStore(ctx, f.server.store, txn, "test-bundle", bundle.Manifest{
-		Revision: "AAAAA",
-		Roots:    &[]string{"a/b/c", "x/y", "foobar"},
-	}); err != nil {
-		t.Fatal(err)
-	}
+				if err := bundle.WriteManifestToStore(ctx, f.server.store, txn, "test-bundle", bundle.Manifest{
+					Revision: "AAAAA",
+					Roots:    &[]string{"a/b/c", "x/y", "foobar"},
+				}); err != nil {
+					t.Fatal(err)
+				}
 
-	if err := f.server.store.UpsertPolicy(ctx, txn, "someid", []byte(`package x.y.z`)); err != nil {
-		t.Fatal(err)
-	}
+				if err := f.server.store.UpsertPolicy(ctx, txn, "someid", []byte(`package x.y.z`)); err != nil {
+					t.Fatal(err)
+				}
 
-	if err := f.server.store.Commit(ctx, txn); err != nil {
-		t.Fatal(err)
-	}
+				if err := f.server.store.Commit(ctx, txn); err != nil {
+					t.Fatal(err)
+				}
 
-	cases := []tr{
-		{
-			method: "PUT",
-			path:   "/data/a/b",
-			body:   "1",
-			code:   http.StatusBadRequest,
-			resp:   `{"code": "invalid_parameter", "message": "path a/b is owned by bundle \"test-bundle\""}`,
-		},
-		{
-			method: "PUT",
-			path:   "/data/a/b/c",
-			body:   "1",
-			code:   http.StatusBadRequest,
-			resp:   `{"code": "invalid_parameter", "message": "path a/b/c is owned by bundle \"test-bundle\""}`,
-		},
-		{
-			method: "PUT",
-			path:   "/data/a/b/c/d",
-			body:   "1",
-			code:   http.StatusBadRequest,
-			resp:   `{"code": "invalid_parameter", "message": "path a/b/c/d is owned by bundle \"test-bundle\""}`,
-		},
-		{
-			method: "PUT",
-			path:   "/data/a/b/d",
-			body:   "1",
-			code:   http.StatusNoContent,
-		},
-		{
-			method: "PATCH",
-			path:   "/data/a",
-			body:   `[{"path": "/b/c", "op": "add", "value": 1}]`,
-			code:   http.StatusBadRequest,
-			resp:   `{"code": "invalid_parameter", "message": "path a/b/c is owned by bundle \"test-bundle\""}`,
-		},
-		{
-			method: "DELETE",
-			path:   "/data/a",
-			code:   http.StatusBadRequest,
-			resp:   `{"code": "invalid_parameter", "message": "path a is owned by bundle \"test-bundle\""}`,
-		},
-		{
-			method: "PUT",
-			path:   "/policies/test1",
-			body:   `package a.b`,
-			code:   http.StatusBadRequest,
-			resp:   `{"code": "invalid_parameter", "message": "path a/b is owned by bundle \"test-bundle\""}`,
-		},
-		{
-			method: "DELETE",
-			path:   "/policies/someid",
-			code:   http.StatusBadRequest,
-			resp:   `{"code": "invalid_parameter", "message": "path x/y/z is owned by bundle \"test-bundle\""}`,
-		},
-		{
-			method: "PUT",
-			path:   "/data/foo/bar",
-			body:   "1",
-			code:   http.StatusNoContent,
-		},
-		{
-			method: "PUT",
-			path:   "/data/foo",
-			body:   "1",
-			code:   http.StatusNoContent,
-		},
-		{
-			method: "PUT",
-			path:   "/data",
-			body:   `{"a": "b"}`,
-			code:   http.StatusBadRequest,
-			resp:   `{"code": "invalid_parameter", "message": "can't write to document root with bundle roots configured"}`,
-		},
-	}
+				cases := []tr{
+					{
+						method: "PUT",
+						path:   "/data/a/b",
+						body:   "1",
+						code:   http.StatusBadRequest,
+						resp:   `{"code": "invalid_parameter", "message": "path a/b is owned by bundle \"test-bundle\""}`,
+					},
+					{
+						method: "PUT",
+						path:   "/data/a/b/c",
+						body:   "1",
+						code:   http.StatusBadRequest,
+						resp:   `{"code": "invalid_parameter", "message": "path a/b/c is owned by bundle \"test-bundle\""}`,
+					},
+					{
+						method: "PUT",
+						path:   "/data/a/b/c/d",
+						body:   "1",
+						code:   http.StatusBadRequest,
+						resp:   `{"code": "invalid_parameter", "message": "path a/b/c/d is owned by bundle \"test-bundle\""}`,
+					},
+					{
+						method: "PUT",
+						path:   "/data/a/b/d",
+						body:   "1",
+						code:   http.StatusNoContent,
+					},
+					{
+						method: "PATCH",
+						path:   "/data/a",
+						body:   `[{"path": "/b/c", "op": "add", "value": 1}]`,
+						code:   http.StatusBadRequest,
+						resp:   `{"code": "invalid_parameter", "message": "path a/b/c is owned by bundle \"test-bundle\""}`,
+					},
+					{
+						method: "DELETE",
+						path:   "/data/a",
+						code:   http.StatusBadRequest,
+						resp:   `{"code": "invalid_parameter", "message": "path a is owned by bundle \"test-bundle\""}`,
+					},
+					{
+						method: "PUT",
+						path:   "/policies/test1",
+						body:   `package a.b`,
+						code:   http.StatusBadRequest,
+						resp:   `{"code": "invalid_parameter", "message": "path a/b is owned by bundle \"test-bundle\""}`,
+					},
+					{
+						method: "PUT",
+						path:   "/policies/someid",
+						body:   `package other.path`,
+						code:   http.StatusBadRequest,
+						resp:   `{"code": "invalid_parameter", "message": "path x/y/z is owned by bundle \"test-bundle\""}`,
+					},
+					{
+						method: "DELETE",
+						path:   "/policies/someid",
+						code:   http.StatusBadRequest,
+						resp:   `{"code": "invalid_parameter", "message": "path x/y/z is owned by bundle \"test-bundle\""}`,
+					},
+					{
+						method: "PUT",
+						path:   "/data/foo/bar",
+						body:   "1",
+						code:   http.StatusNoContent,
+					},
+					{
+						method: "PUT",
+						path:   "/data/foo",
+						body:   "1",
+						code:   http.StatusNoContent,
+					},
+					{
+						method: "PUT",
+						path:   "/data",
+						body:   `{"a": "b"}`,
+						code:   http.StatusBadRequest,
+						resp:   `{"code": "invalid_parameter", "message": "can't write to document root with bundle roots configured"}`,
+					},
+				}
 
-	if err := f.v1TestRequests(cases); err != nil {
-		t.Fatal(err)
-	}
+				if err := f.v1TestRequests(cases); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+	})
 }
 
 func TestBundleScopeMultiBundle(t *testing.T) {
@@ -1904,13 +2387,23 @@ func TestDataGetExplainFull(t *testing.T) {
 		t.Fatalf("Expected exactly %d events but got %d", nexpect, len(explain))
 	}
 
-	_, ok := explain[2].Node.(ast.Body)
-	if !ok {
-		t.Fatalf("Expected body for node but got: %v", explain[2].Node)
+	exitEvent := -1
+	for i := 0; i < len(explain) && exitEvent < 0; i++ {
+		if explain[i].Op == "exit" {
+			exitEvent = i
+		}
+	}
+	if exitEvent < 0 {
+		t.Fatalf("Expected one exit node but found none")
 	}
 
-	if len(explain[2].Locals) != 1 {
-		t.Fatalf("Expected one binding but got: %v", explain[2].Locals)
+	_, ok := explain[exitEvent].Node.(ast.Body)
+	if !ok {
+		t.Fatalf("Expected body for node but got: %v", explain[exitEvent].Node)
+	}
+
+	if len(explain[exitEvent].Locals) != 1 {
+		t.Fatalf("Expected one binding but got: %v", explain[exitEvent].Locals)
 	}
 
 	req = newReqV1(http.MethodGet, "/data/deadbeef?explain=full", "")
@@ -1928,12 +2421,14 @@ func TestDataGetExplainFull(t *testing.T) {
 	}
 
 	explain = mustUnmarshalTrace(result.Explanation)
-	if len(explain) != 3 {
-		t.Fatalf("Expected exactly 3 events but got %d", len(explain))
+	nexpect = 3
+	if len(explain) != nexpect {
+		t.Fatalf("Expected exactly %d events but got %d", nexpect, len(explain))
 	}
 
-	if explain[2].Op != "fail" {
-		t.Fatalf("Expected last event to be 'fail' but got: %v", explain[2])
+	lastEvent := len(explain) - 1
+	if explain[lastEvent].Op != "fail" {
+		t.Fatalf("Expected last event to be 'fail' but got: %v", explain[lastEvent])
 	}
 
 	req = newReqV1(http.MethodGet, "/data/x?explain=full&pretty=true", "")
@@ -2268,51 +2763,76 @@ func TestDataProvenanceMultiBundle(t *testing.T) {
 }
 
 func TestDataMetricsEval(t *testing.T) {
-	f := newFixture(t)
+	// These tests all use the POST /v1/data API with ?metrics appended.
+	// We're setting up the disk store because that injects a few extra metrics,
+	// which storage/inmem does not.
 
-	// Make a request to evaluate `data`
-	testDataMetrics(t, f, "/data?metrics", []string{
-		"counter_server_query_cache_hit",
-		"timer_rego_input_parse_ns",
-		"timer_rego_query_parse_ns",
-		"timer_rego_query_compile_ns",
-		"timer_rego_query_eval_ns",
-		"timer_server_handler_ns",
-		"timer_rego_external_resolve_ns",
-	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	test.WithTempFS(nil, func(root string) {
+		disk, err := disk.New(ctx, logging.NewNoOpLogger(), nil, disk.Options{Dir: root})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer disk.Close(ctx)
 
-	// Repeat previous request, expect to have hit the query cache
-	// so fewer timers should have been reported.
-	testDataMetrics(t, f, "/data?metrics", []string{
-		"counter_server_query_cache_hit",
-		"timer_rego_input_parse_ns",
-		"timer_rego_query_eval_ns",
-		"timer_server_handler_ns",
-		"timer_rego_external_resolve_ns",
-	})
+		f := newFixtureWithStore(t, disk)
 
-	// Make a request to evaluate `data` and use partial evaluation,
-	// this should not hit the same query cache result as the previous
-	// request.
-	testDataMetrics(t, f, "/data?metrics&partial", []string{
-		"counter_server_query_cache_hit",
-		"timer_rego_input_parse_ns",
-		"timer_rego_module_compile_ns",
-		"timer_rego_query_parse_ns",
-		"timer_rego_query_compile_ns",
-		"timer_rego_query_eval_ns",
-		"timer_rego_partial_eval_ns",
-		"timer_server_handler_ns",
-		"timer_rego_external_resolve_ns",
-	})
+		// Make a request to evaluate `data`
+		testDataMetrics(t, f, "/data?metrics", []string{
+			"counter_server_query_cache_hit",
+			"counter_disk_read_keys",
+			"counter_disk_read_bytes",
+			"timer_rego_input_parse_ns",
+			"timer_rego_query_parse_ns",
+			"timer_rego_query_compile_ns",
+			"timer_rego_query_eval_ns",
+			"timer_server_handler_ns",
+			"timer_disk_read_ns",
+			"timer_rego_external_resolve_ns",
+		})
 
-	// Repeat previous partial eval request, this time it should
-	// be cached
-	testDataMetrics(t, f, "/data?metrics&partial", []string{
-		"counter_server_query_cache_hit",
-		"timer_rego_input_parse_ns",
-		"timer_rego_query_eval_ns",
-		"timer_server_handler_ns",
+		// Repeat previous request, expect to have hit the query cache
+		// so fewer timers should have been reported.
+		testDataMetrics(t, f, "/data?metrics", []string{
+			"counter_server_query_cache_hit",
+			"counter_disk_read_keys",
+			"counter_disk_read_bytes",
+			"timer_rego_input_parse_ns",
+			"timer_rego_query_eval_ns",
+			"timer_server_handler_ns",
+			"timer_disk_read_ns",
+			"timer_rego_external_resolve_ns",
+		})
+
+		// Make a request to evaluate `data` and use partial evaluation,
+		// this should not hit the same query cache result as the previous
+		// request.
+		testDataMetrics(t, f, "/data?metrics&partial", []string{
+			"counter_server_query_cache_hit",
+			"counter_disk_read_keys",
+			"counter_disk_read_bytes",
+			"timer_rego_input_parse_ns",
+			"timer_rego_module_compile_ns",
+			"timer_rego_query_parse_ns",
+			"timer_rego_query_compile_ns",
+			"timer_rego_query_eval_ns",
+			"timer_rego_partial_eval_ns",
+			"timer_server_handler_ns",
+			"timer_disk_read_ns",
+			"timer_rego_external_resolve_ns",
+		})
+
+		// Repeat previous partial eval request, this time it should
+		// be cached
+		testDataMetrics(t, f, "/data?metrics&partial", []string{
+			"counter_server_query_cache_hit",
+			"counter_disk_read_keys",
+			"timer_rego_input_parse_ns",
+			"timer_rego_query_eval_ns",
+			"timer_server_handler_ns",
+			"timer_disk_read_ns",
+		})
 	})
 }
 
@@ -2327,9 +2847,14 @@ func testDataMetrics(t *testing.T, f *fixture, url string, expected []string) {
 	if err := util.NewJSONDecoder(f.recorder.Body).Decode(&result); err != nil {
 		t.Fatalf("Unexpected JSON decode error: %v", err)
 	}
+	assertMetricsExist(t, result.Metrics, expected)
+}
+
+func assertMetricsExist(t *testing.T, metrics types.MetricsV1, expected []string) {
+	t.Helper()
 
 	for _, key := range expected {
-		v, ok := result.Metrics[key]
+		v, ok := metrics[key]
 		if !ok {
 			t.Errorf("Missing expected metric: %s", key)
 		} else if v == nil {
@@ -2338,8 +2863,8 @@ func testDataMetrics(t *testing.T, f *fixture, url string, expected []string) {
 
 	}
 
-	if len(expected) != len(result.Metrics) {
-		t.Errorf("Expected %d metrics, got %d\n\n\tValues: %+v", len(expected), len(result.Metrics), result.Metrics)
+	if len(expected) != len(metrics) {
+		t.Errorf("Expected %d metrics, got %d\n\n\tValues: %+v", len(expected), len(metrics), metrics)
 	}
 }
 
@@ -2789,7 +3314,8 @@ func TestStatusV1(t *testing.T) {
 	// Expect HTTP 200 and updated status after bundle update occurs
 	bs.BulkUpdateBundleStatus(map[string]*pluginBundle.Status{
 		"test": {
-			Name: "test",
+			Name:     "test",
+			HTTPCode: "403",
 		},
 	})
 
@@ -2805,7 +3331,8 @@ func TestStatusV1(t *testing.T) {
 		Result struct {
 			Bundles struct {
 				Test struct {
-					Name string
+					Name     string
+					HTTPCode json.Number `json:"http_code"`
 				}
 			}
 		}
@@ -2813,8 +3340,172 @@ func TestStatusV1(t *testing.T) {
 
 	if err := util.NewJSONDecoder(f.recorder.Body).Decode(&resp2); err != nil {
 		t.Fatal(err)
-	} else if resp2.Result.Bundles.Test.Name != "test" {
+	}
+	if resp2.Result.Bundles.Test.Name != "test" {
 		t.Fatal("expected bundle to exist in status response but got:", resp2)
+	}
+	if resp2.Result.Bundles.Test.HTTPCode != "403" {
+		t.Fatal("expected HTTPCode to equal 403 but got:", resp2)
+	}
+}
+
+func TestStatusV1MetricsWithSystemAuthzPolicy(t *testing.T) {
+
+	ctx := context.Background()
+
+	// Add the authz policy
+	store := inmem.New()
+	txn := storage.NewTransactionOrDie(ctx, store, storage.WriteParams)
+	authzPolicy := `package system.authz
+	default allow = false
+	allow {
+		input.path = ["v1", "status"]
+	}`
+
+	if err := store.UpsertPolicy(ctx, txn, "test", []byte(authzPolicy)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.Commit(ctx, txn); err != nil {
+		t.Fatal(err)
+	}
+
+	// Add Prometheus Registerer to be used by plugins
+	inner := metrics.New()
+
+	logger := func(logger logging.Logger) func(attrs map[string]interface{}, f string, a ...interface{}) {
+		return func(attrs map[string]interface{}, f string, a ...interface{}) {
+			logger.WithFields(attrs).Error(f, a...)
+		}
+	}(logging.NewNoOpLogger())
+
+	prom := prometheus.New(inner, logger)
+	serverOpts := []func(s *Server){func(s *Server) { s.WithAuthorization(AuthorizationBasic) }, func(s *Server) { s.WithMetrics(prom) }}
+
+	f := newFixtureWithStore(t, store, serverOpts...)
+
+	// Expect HTTP 500 before status plugin is registered
+	req := newReqV1(http.MethodGet, "/status", "")
+	f.server.Handler.ServeHTTP(f.recorder, req)
+
+	if f.recorder.Result().StatusCode != http.StatusInternalServerError {
+		t.Fatal("expected internal error")
+	}
+
+	// Register Status plugin
+	manual := plugins.TriggerManual
+	bs := pluginStatus.New(&pluginStatus.Config{Trigger: &manual, Prometheus: true}, f.server.manager).WithMetrics(prom)
+	err := bs.Start(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.server.manager.Register(pluginStatus.Name, bs)
+
+	// Fetch the status info
+	req = newReqV1(http.MethodGet, "/status", "")
+	f.reset()
+	f.server.Handler.ServeHTTP(f.recorder, req)
+	if f.recorder.Result().StatusCode != http.StatusOK {
+		t.Fatal("expected ok")
+	}
+
+	var resp1 struct {
+		Result struct {
+			Plugins struct {
+				Status struct {
+					State string
+				}
+			}
+		}
+	}
+	if err := util.NewJSONDecoder(f.recorder.Body).Decode(&resp1); err != nil {
+		t.Fatal(err)
+	} else if resp1.Result.Plugins.Status.State != "OK" {
+		t.Fatal("expected plugin state for status to be 'OK' but got:", resp1)
+	}
+
+	// Make requests that should get denied
+	req = newReqV1(http.MethodGet, "/policies", "")
+	f.reset()
+	f.server.Handler.ServeHTTP(f.recorder, req)
+
+	if f.recorder.Result().StatusCode != http.StatusUnauthorized {
+		t.Fatalf("Expected success but got %v", f.recorder)
+	}
+
+	req = newReqV1(http.MethodGet, "/data", "")
+	f.reset()
+	f.server.Handler.ServeHTTP(f.recorder, req)
+
+	if f.recorder.Result().StatusCode != http.StatusUnauthorized {
+		t.Fatalf("Expected success but got %v", f.recorder)
+	}
+
+	// Check Prometheus status metrics in the Status API
+
+	req = newReqV1(http.MethodGet, "/status", "")
+	f.reset()
+	f.server.Handler.ServeHTTP(f.recorder, req)
+
+	if f.recorder.Result().StatusCode != http.StatusOK {
+		t.Fatal("expected ok")
+	}
+
+	var resp struct {
+		Result struct {
+			Plugins struct {
+				Status struct {
+					State string
+				}
+			}
+			Metrics map[string]interface{}
+		}
+	}
+	if err := util.NewJSONDecoder(f.recorder.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	} else if resp.Result.Plugins.Status.State != "OK" {
+		t.Fatal("expected plugin state for status to be 'OK' but got:", resp)
+	}
+
+	met, ok := resp.Result.Metrics["prometheus"]
+	if !ok {
+		t.Fatal("expected prometheus metrics to be present in status")
+	}
+
+	promMet, ok := met.(map[string]interface{})
+	if !ok {
+		t.Fatal("expected prometheus metrics to be a map")
+	}
+
+	httpMet, ok := promMet["http_request_duration_seconds"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected http_request_duration_seconds metric to be a map")
+	}
+
+	innerMet, ok := httpMet["metric"].([]interface{})
+	if !ok {
+		t.Fatal("expected http_request_duration_seconds histogram metric to be a list")
+	}
+
+	expected := []interface{}{map[string]interface{}{"name": "code", "value": "401"},
+		map[string]interface{}{"name": "handler", "value": "authz"},
+		map[string]interface{}{"name": "method", "value": "get"}}
+
+	found := false
+	for _, m := range innerMet {
+		item, ok := m.(map[string]interface{})
+		if ok {
+			if reflect.DeepEqual(item["label"].([]interface{}), expected) {
+				found = true
+				break
+			}
+		} else {
+			t.Fatal("expected each http_request_duration_seconds histogram metric element to be a map")
+		}
+	}
+
+	if !found {
+		t.Fatalf("expected to find metrics %v but found no match", expected)
 	}
 }
 
@@ -2861,7 +3552,13 @@ func TestDecisionIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := f.v1("POST", "/data/undefined", "", 200, `{"decision_id": "2"}`); err != nil {
+	if err := f.v1("POST", "/data/undefined", "", 200, `{
+		"decision_id": "2",
+		"warning": {
+			"code": "api_usage_warning",
+			"message": "'input' key missing from the request"
+		}
+	}`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2869,7 +3566,14 @@ func TestDecisionIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := f.v1("POST", "/data", "", 200, `{"decision_id": "4", "result": {}}`); err != nil {
+	if err := f.v1("POST", "/data", "", 200, `{
+		"decision_id": "4",
+		"result": {},
+		"warning": {
+			"code": "api_usage_warning",
+			"message": "'input' key missing from the request"
+		}
+	}`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2914,9 +3618,16 @@ func TestDecisionLogging(t *testing.T) {
 			response: "{}",
 		},
 		{
-			method:   "POST",
-			path:     "/data",
-			response: `{"result": {}, "decision_id": "1"}`,
+			method: "POST",
+			path:   "/data",
+			response: `{
+				"result": {},
+				"warning": {
+					"code": "api_usage_warning",
+					"message": "'input' key missing from the request"
+				},
+				"decision_id": "1"
+			}`,
 		},
 		{
 			method:   "GET",
@@ -2989,7 +3700,7 @@ func TestDecisionLogging(t *testing.T) {
 			code:   404,
 			response: `{
 				"code": "undefined_document",
-				"message": "document missing or undefined: data.test"
+				"message": "document missing: data.test"
 			  }`,
 		},
 	}
@@ -3077,31 +3788,50 @@ func TestDecisionLogErrorMessage(t *testing.T) {
 }
 
 func TestQueryV1(t *testing.T) {
-	f := newFixture(t)
-	get := newReqV1(http.MethodGet, `/query?q=a=[1,2,3]%3Ba[i]=x`, "")
-	f.server.Handler.ServeHTTP(f.recorder, get)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	test.WithTempFS(nil, func(root string) {
+		disk, err := disk.New(ctx, logging.NewNoOpLogger(), nil, disk.Options{Dir: root})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer disk.Close(ctx)
 
-	if f.recorder.Code != 200 {
-		t.Fatalf("Expected success but got %v", f.recorder)
-	}
+		f := newFixtureWithStore(t, disk)
+		get := newReqV1(http.MethodGet, `/query?q=a=[1,2,3]%3Ba[i]=x&metrics`, "")
+		f.server.Handler.ServeHTTP(f.recorder, get)
 
-	var expected types.QueryResponseV1
-	err := util.UnmarshalJSON([]byte(`{
+		if f.recorder.Code != 200 {
+			t.Fatalf("Expected success but got %v", f.recorder)
+		}
+
+		var expected types.QueryResponseV1
+		err = util.UnmarshalJSON([]byte(`{
 		"result": [{"a":[1,2,3],"i":0,"x":1},{"a":[1,2,3],"i":1,"x":2},{"a":[1,2,3],"i":2,"x":3}]
 	}`), &expected)
-	if err != nil {
-		panic(err)
-	}
+		if err != nil {
+			panic(err)
+		}
 
-	var result types.QueryResponseV1
-	err = util.UnmarshalJSON(f.recorder.Body.Bytes(), &result)
-	if err != nil {
-		t.Fatalf("Unexpected error while unmarshalling result: %v", err)
-	}
+		var result types.QueryResponseV1
+		err = util.UnmarshalJSON(f.recorder.Body.Bytes(), &result)
+		if err != nil {
+			t.Fatalf("Unexpected error while unmarshalling result: %v", err)
+		}
 
-	if !reflect.DeepEqual(result, expected) {
-		t.Fatalf("Expected %v but got: %v", expected, result)
-	}
+		assertMetricsExist(t, result.Metrics, []string{
+			"counter_disk_read_keys",
+			"timer_rego_query_compile_ns",
+			"timer_rego_query_eval_ns",
+			// "timer_server_handler_ns", // TODO(sr): we're not consistent about timing this?
+			"timer_disk_read_ns",
+		})
+
+		result.Metrics = nil
+		if !reflect.DeepEqual(result, expected) {
+			t.Fatalf("Expected %v but got: %v", expected, result)
+		}
+	})
 }
 
 func TestBadQueryV1(t *testing.T) {
@@ -3178,6 +3908,15 @@ func TestUnversionedPost(t *testing.T) {
 		t.Fatalf("Expected not found before policy added but got %v", f.recorder)
 	}
 
+	expectedBody := `{
+  "code": "undefined_document",
+  "message": "document missing: data.system.main"
+}
+`
+	if f.recorder.Body.String() != expectedBody {
+		t.Errorf("Expected %s got %s", expectedBody, f.recorder.Body.String())
+	}
+
 	module := `
 	package system.main
 
@@ -3193,15 +3932,45 @@ func TestUnversionedPost(t *testing.T) {
 	f.reset()
 	f.server.Handler.ServeHTTP(f.recorder, post())
 
-	expected := `{"agg":6}`
+	expected := "{\"agg\":6}\n"
 	if f.recorder.Code != 200 || f.recorder.Body.String() != expected {
 		t.Fatalf(`Expected HTTP 200 / %v but got: %v`, expected, f.recorder)
+	}
+
+	module = `
+	package system
+
+	main {
+		input.foo == "bar"
+	}
+	`
+
+	if err := f.v1("PUT", "/policies/test", module, 200, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	f.reset()
+	f.server.Handler.ServeHTTP(f.recorder, func() *http.Request {
+		return newReqUnversioned(http.MethodPost, "/", `{"input": {"foo": "bar"}}`)
+	}())
+
+	if f.recorder.Code != 404 {
+		t.Fatalf("Expected not found before policy added but got %v", f.recorder)
+	}
+
+	expectedBody = `{
+  "code": "undefined_document",
+  "message": "document undefined: data.system.main"
+}
+`
+	if f.recorder.Body.String() != expectedBody {
+		t.Errorf("Expected %s got %s", expectedBody, f.recorder.Body.String())
 	}
 }
 
 func TestQueryV1Explain(t *testing.T) {
 	f := newFixture(t)
-	get := newReqV1(http.MethodGet, `/query?q=a=[1,2,3]%3Ba[i]=x&explain=full`, "")
+	get := newReqV1(http.MethodGet, `/query?q=a=[1,2,3]%3Ba[i]=x&explain=debug`, "")
 	f.server.Handler.ServeHTTP(f.recorder, get)
 
 	if f.recorder.Code != 200 {
@@ -3214,9 +3983,10 @@ func TestQueryV1Explain(t *testing.T) {
 		t.Fatalf("Unexpected JSON decode error: %v", err)
 	}
 
+	nexpect := 21
 	explain := mustUnmarshalTrace(result.Explanation)
-	if len(explain) != 13 {
-		t.Fatalf("Expected exactly 10 trace events for full query but got %d", len(explain))
+	if len(explain) != nexpect {
+		t.Fatalf("Expected exactly %d trace events for full query but got %d", nexpect, len(explain))
 	}
 }
 
@@ -3339,6 +4109,73 @@ func TestAuthorization(t *testing.T) {
 	}
 }
 
+func TestAuthorizationUsesInterQueryCache(t *testing.T) {
+
+	ctx := context.Background()
+	store := inmem.New()
+	m, err := plugins.New([]byte{}, "test", store)
+	if err != nil {
+		panic(err)
+	}
+
+	if err := m.Start(ctx); err != nil {
+		panic(err)
+	}
+
+	txn := storage.NewTransactionOrDie(ctx, store, storage.WriteParams)
+
+	var c uint64
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddUint64(&c, 1)
+		fmt.Fprintf(w, `{"count": %d}`, c)
+	}))
+
+	authzPolicy := fmt.Sprintf(`package system.authz
+
+default allow := false
+
+allow {
+	resp := http.send({
+		"method": "GET", "url": "%[1]s/foo",
+		"force_cache": true,
+		"force_json_decode": true,
+		"force_cache_duration_seconds": 60,
+	})
+
+	resp.body.count == 1
+}
+`, ts.URL)
+	t.Log(authzPolicy)
+
+	if err := store.UpsertPolicy(ctx, txn, "test", []byte(authzPolicy)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.Commit(ctx, txn); err != nil {
+		t.Fatal(err)
+	}
+
+	server, err := New().
+		WithAddresses([]string{":8182"}).
+		WithStore(store).
+		WithManager(m).
+		WithAuthorization(AuthorizationBasic).
+		Init(ctx)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 5; i++ {
+		req1, err := http.NewRequest(http.MethodGet, "http://localhost:8182/health", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		validateAuthorizedRequest(t, server, req1, http.StatusOK)
+	}
+}
+
 func validateAuthorizedRequest(t *testing.T, s *Server, req *http.Request, exp int) {
 	t.Helper()
 
@@ -3347,7 +4184,7 @@ func validateAuthorizedRequest(t *testing.T, s *Server, req *http.Request, exp i
 	// First check the main router
 	s.Handler.ServeHTTP(r, req)
 	if r.Code != exp {
-		t.Fatalf("(Default Handler) Expected %v but got: %v", exp, r)
+		t.Errorf("(Default Handler) Expected %v but got: %v", exp, r)
 	}
 
 	r = httptest.NewRecorder()
@@ -3355,7 +4192,7 @@ func validateAuthorizedRequest(t *testing.T, s *Server, req *http.Request, exp i
 	// Ensure that auth happens for the diagnostic handler as well
 	s.DiagnosticHandler.ServeHTTP(r, req)
 	if r.Code != exp {
-		t.Fatalf("(Diagnostic Handler) Expected %v but got: %v", exp, r)
+		t.Errorf("(Diagnostic Handler) Expected %v but got: %v", exp, r)
 	}
 }
 
@@ -3493,6 +4330,10 @@ func (queryBindingErrStore) Abort(ctx context.Context, txn storage.Transaction) 
 
 }
 
+func (queryBindingErrStore) Truncate(context.Context, storage.Transaction, storage.TransactionParams, storage.Iterator) error {
+	return nil
+}
+
 func (queryBindingErrStore) Register(context.Context, storage.Transaction, storage.TriggerConfig) (storage.TriggerHandle, error) {
 	return nil, nil
 }
@@ -3558,26 +4399,54 @@ type fixture struct {
 
 func newFixture(t *testing.T, opts ...func(*Server)) *fixture {
 	ctx := context.Background()
-	store := inmem.New()
-	m, err := plugins.New([]byte{}, "test", store)
-	if err != nil {
-		panic(err)
-	}
-
-	if err := m.Start(ctx); err != nil {
-		panic(err)
-	}
-
 	server := New().
 		WithAddresses([]string{"localhost:8182"}).
-		WithStore(store).
-		WithManager(m)
+		WithStore(inmem.New()) // potentially overridden via opts
 	for _, opt := range opts {
 		opt(server)
 	}
+
+	m, err := plugins.New([]byte{}, "test", server.store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server = server.WithManager(m)
+	if err := m.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
 	server, err = server.Init(ctx)
 	if err != nil {
-		panic(err)
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+
+	return &fixture{
+		server:   server,
+		recorder: recorder,
+		t:        t,
+	}
+}
+
+func newFixtureWithConfig(t *testing.T, config string, opts ...func(*Server)) *fixture {
+	ctx := context.Background()
+	server := New().
+		WithAddresses([]string{"localhost:8182"}).
+		WithStore(inmem.New()) // potentially overridden via opts
+	for _, opt := range opts {
+		opt(server)
+	}
+
+	m, err := plugins.New([]byte(config), "test", server.store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server = server.WithManager(m)
+	if err := m.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	server, err = server.Init(ctx)
+	if err != nil {
+		t.Fatal(err)
 	}
 	recorder := httptest.NewRecorder()
 
@@ -3622,7 +4491,7 @@ func newFixtureWithStore(t *testing.T, store storage.Store, opts ...func(*Server
 func (f *fixture) v1TestRequests(trs []tr) error {
 	for i, tr := range trs {
 		if err := f.v1(tr.method, tr.path, tr.body, tr.code, tr.resp); err != nil {
-			return errors.Wrapf(err, "error on test request #%d", i+1)
+			return fmt.Errorf("error on test request #%d: %w", i+1, err)
 		}
 	}
 	return nil
@@ -3688,13 +4557,22 @@ func (f *fixture) reset() {
 	f.recorder = httptest.NewRecorder()
 }
 
-func executeRequests(t *testing.T, reqs []tr) {
+type variant struct {
+	name string
+	opts []func(*Server)
+}
+
+func executeRequests(t *testing.T, reqs []tr, variants ...variant) {
 	t.Helper()
-	f := newFixture(t)
-	for i, req := range reqs {
-		if err := f.v1(req.method, req.path, req.body, req.code, req.resp); err != nil {
-			t.Errorf("Unexpected response on request %d: %v", i+1, err)
-		}
+	for _, v := range variants {
+		t.Run(v.name, func(t *testing.T) {
+			f := newFixture(t, v.opts...)
+			for i, req := range reqs {
+				if err := f.v1(req.method, req.path, req.body, req.code, req.resp); err != nil {
+					t.Errorf("Unexpected response on request %d: %v", i+1, err)
+				}
+			}
+		})
 	}
 }
 
@@ -3744,6 +4622,26 @@ func newReq(version int, method, path, body string) *http.Request {
 
 func newReqUnversioned(method, path, body string) *http.Request {
 	req, err := http.NewRequest(method, path, strings.NewReader(body))
+	if err != nil {
+		panic(err)
+	}
+	return req
+}
+
+func newStreamedReqV0(method string, path string, body io.Reader) *http.Request {
+	return newStreamedReq(0, method, path, body)
+}
+
+func newStreamedReqV1(method string, path string, body io.Reader) *http.Request {
+	return newStreamedReq(1, method, path, body)
+}
+
+func newStreamedReq(version int, method string, path string, body io.Reader) *http.Request {
+	return newStreamedReqUnversioned(method, fmt.Sprintf("/v%d", version)+path, body)
+}
+
+func newStreamedReqUnversioned(method string, path string, body io.Reader) *http.Request {
+	req, err := http.NewRequest(method, path, body)
 	if err != nil {
 		panic(err)
 	}
@@ -4052,19 +4950,51 @@ func TestDiagnosticRoutes(t *testing.T) {
 
 }
 
+func TestDistributedTracingEnabled(t *testing.T) {
+	c := []byte(`{"distributed_tracing": {
+		"type": "grpc"
+		}}`)
+
+	ctx := context.Background()
+	_, tracerProvider, err := distributedtracing.Init(ctx, c, "foo")
+	if err != nil {
+		t.Fatalf("Unexpected error initializing trace exporter %v", err)
+	}
+	traceOpts := tracing.NewOptions(
+		otelhttp.WithTracerProvider(tracerProvider),
+		otelhttp.WithPropagators(propagation.TraceContext{}),
+	)
+	s := New()
+	s.WithDistributedTracingOpts(traceOpts)
+	handler := s.instrumentHandler(writer.HTTPStatus(405), "test")
+	_, ok := handler.(*otelhttp.Handler)
+	if !ok {
+		t.Fatal("Expected otelhttp handler if distributed tracing enabled")
+	}
+}
+
+func TestDistributedTracingDisabled(t *testing.T) {
+	s := New()
+	handler := s.instrumentHandler(writer.HTTPStatus(405), "test")
+	_, ok := handler.(*otelhttp.Handler)
+	if ok {
+		t.Fatal("Unexpected otelhttp handler if distributed tracing disabled")
+	}
+}
+
 type mockHTTPHandler struct{}
 
-func (m *mockHTTPHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+func (*mockHTTPHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
 type mockMetricsProvider struct{}
 
-func (m *mockMetricsProvider) RegisterEndpoints(registrar func(path, method string, handler http.Handler)) {
+func (*mockMetricsProvider) RegisterEndpoints(registrar func(string, string, http.Handler)) {
 	registrar("/metrics", "GET", new(mockHTTPHandler))
 }
 
-func (m *mockMetricsProvider) InstrumentHandler(handler http.Handler, label string) http.Handler {
+func (*mockMetricsProvider) InstrumentHandler(handler http.Handler, _ string) http.Handler {
 	return handler
 }
 
@@ -4076,21 +5006,19 @@ type mockHTTPListener struct {
 	t            httpListenerType
 }
 
-var _ httpListener = (*mockHTTPListener)(nil)
-
 func (m mockHTTPListener) Addr() string {
 	return m.addrs
 }
 
-func (m mockHTTPListener) ListenAndServe() error {
+func (mockHTTPListener) ListenAndServe() error {
 	return errors.New("not implemented")
 }
 
-func (m mockHTTPListener) ListenAndServeTLS(certFile, keyFile string) error {
+func (mockHTTPListener) ListenAndServeTLS(string, string) error {
 	return errors.New("not implemented")
 }
 
-func (m mockHTTPListener) Shutdown(ctx context.Context) error {
+func (m mockHTTPListener) Shutdown(context.Context) error {
 	var err error
 	if m.shutdownHook != nil {
 		err = m.shutdownHook()
@@ -4100,4 +5028,16 @@ func (m mockHTTPListener) Shutdown(ctx context.Context) error {
 
 func (m mockHTTPListener) Type() httpListenerType {
 	return m.t
+}
+
+func zipString(input string) []byte {
+	var b bytes.Buffer
+	gz := gzip.NewWriter(&b)
+	if _, err := gz.Write([]byte(input)); err != nil {
+		log.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		log.Fatal(err)
+	}
+	return b.Bytes()
 }

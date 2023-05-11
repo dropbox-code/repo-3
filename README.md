@@ -1,6 +1,6 @@
 # ![logo](./logo/logo-144x144.png) Open Policy Agent
 
-[![Slack Status](http://slack.openpolicyagent.org/badge.svg)](https://slack.openpolicyagent.org) [![Build Status](https://github.com/open-policy-agent/opa/workflows/Post%20Merge/badge.svg?branch=main)](https://github.com/open-policy-agent/opa/actions) [![Go Report Card](https://goreportcard.com/badge/open-policy-agent/opa)](https://goreportcard.com/report/open-policy-agent/opa) [![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/1768/badge)](https://bestpractices.coreinfrastructure.org/projects/1768) [![Netlify Status](https://api.netlify.com/api/v1/badges/4a0a092a-8741-4826-a28f-826d4a576cab/deploy-status)](https://app.netlify.com/sites/openpolicyagent/deploys)
+[![Build Status](https://github.com/open-policy-agent/opa/workflows/Post%20Merge/badge.svg?branch=main)](https://github.com/open-policy-agent/opa/actions) [![Go Report Card](https://goreportcard.com/badge/open-policy-agent/opa)](https://goreportcard.com/report/open-policy-agent/opa) [![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/1768/badge)](https://bestpractices.coreinfrastructure.org/projects/1768) [![Netlify Status](https://api.netlify.com/api/v1/badges/4a0a092a-8741-4826-a28f-826d4a576cab/deploy-status)](https://app.netlify.com/sites/openpolicyagent/deploys)
 
 Open Policy Agent (OPA) is an open source, general-purpose policy engine that enables unified, context-aware policy enforcement across the entire stack.
 
@@ -9,7 +9,19 @@ OPA is proud to be a graduated project in the [Cloud Native Computing Foundation
 ## Want to connect with the community or get support for OPA?
 
 - Join the [OPA Slack](https://slack.openpolicyagent.org) for day-to-day conversations with the OPA community.
-- Need Support? Go to the [Discussions Board](https://github.com/open-policy-agent/feedback/discussions) to ask questions.
+- Need Support? Check out the [Community Discussions](https://github.com/orgs/open-policy-agent/discussions) to ask questions.
+
+## Join the OPA Office Hours
+
+**Every Week at these times** 
+  * 10:00 PT / 19:00 CET
+  * 01:30 PT / 10:30 CET
+
+These sessions are open format for community members. Come and ask about new features or the road map for the next release. You can use this time to get unblocked with your OPA deployments, learn more about the project, or to get more involved in the community.
+
+  * [Book a slot](https://calendly.com/styra-devrel/opa-office-hours)
+
+*Watch a replay of a previous office hours on [YouTube](https://www.youtube.com/watch?v=TxFZPrbc9jk&list=PLW-2W4VHBA4RRhCHiiaKHZsDFx-FwH8VU)*
 
 ## What is the this fork for?
 
@@ -26,32 +38,30 @@ git cherry-pick {gitsha of commit with your patches}
 
 - Go to [openpolicyagent.org](https://www.openpolicyagent.org) to get started with documentation and tutorials.
 - Browse [blog.openpolicyagent.org](https://blog.openpolicyagent.org) for news about OPA, community, policy and authorization.
+- Watch OPA's [YouTube](https://www.youtube.com/channel/UClDMRN5HlqD3di5MMf-SV4A) channel for past office hours and other content.
 - Try OPA with the [Rego Playground](https://play.openpolicyagent.org) to experiment with policies and share your work.
 - View the [OPA Roadmap](https://docs.google.com/presentation/d/16QV6gvLDOV3I0_guPC3_19g6jHkEg3X9xqMYgtoCKrs/edit?usp=sharing) to see a high-level snapshot of OPA features in-progress and planned.
 - Check out the [ADOPTERS.md](./ADOPTERS.md) file for a list of production adopters. Does your organization use OPA in production? Support the OPA project by submitting a PR to add your organization to the list with a short description of your OPA use cases!
 
-## Want to get OPA?
+## Want to download OPA?
 
 - [Docker Hub](https://hub.docker.com/r/openpolicyagent/opa/tags/) for Docker images.
 - [GitHub releases](https://github.com/open-policy-agent/opa/releases) for binary releases and changelogs.
 
 ## Want to integrate OPA?
 
-* See
+* See the high-level [Go SDK](https://www.openpolicyagent.org/docs/latest/integration/#integrating-with-the-go-sdk) or the low-level Go API
   [![GoDoc](https://godoc.org/github.com/open-policy-agent/opa?status.svg)](https://godoc.org/github.com/open-policy-agent/opa/rego)
   to integrate OPA with services written in Go.
 * See [REST API](https://www.openpolicyagent.org/docs/rest-api.html) to
   integrate OPA with services written in other languages.
+* See the [integration docs](https://www.openpolicyagent.org/docs/latest/integration/) for more options.
 
 ## Want to contribute to OPA?
 
 * Read the [Contributing Guide](https://www.openpolicyagent.org/docs/latest/contributing/) to learn how to make your first contribution.
-* Use [#development](https://openpolicyagent.slack.com/archives/C02L1TLPN59) in Slack to talk to the OPA maintainers and other contributors.
+* Use [#contributors](https://openpolicyagent.slack.com/archives/C02L1TLPN59) in Slack to talk to other contributors and OPA maintainers.
 * File a [GitHub Issue](https://github.com/open-policy-agent/opa/issues) to request features or report bugs.
-* Join the OPA bi-weekly meetings every other Tuesday at 10:00 (Pacific Timezone):
-    * [Meeting Notes](https://docs.google.com/document/d/1v6l2gmkRKAn5UIg3V2QdeeCcXMElxsNzEzDkVlWDVg8/edit?usp=sharing)
-    * [Zoom](https://zoom.us/j/97827947600)
-    * [Calendar Invite](https://calendar.google.com/event?action=TEMPLATE&tmeid=MnRvb2M4amtldXBuZ2E1azY0MTJndjh0ODRfMjAxODA5MThUMTcwMDAwWiBzdHlyYS5jb21fY28zOXVzc3VobnE2amUzN2l2dHQyYmNiZGdAZw&tmsrc=styra.com_co39ussuhnq6je37ivtt2bcbdg%40group.calendar.google.com&scp=ALL)
 
 ## How does OPA work?
 
@@ -84,6 +94,8 @@ For concrete examples of how to integrate OPA with systems like [Kubernetes](htt
 
 ## Presentations
 
+- OPA maintainers talk @ Kubecon NA 2022: [video](https://www.youtube.com/watch?v=RMiovzGGCfI)
+- Open Policy Agent (OPA) Intro & Deep Dive @ Kubecon EU 2022: [video](https://www.youtube.com/watch?v=MhyQxIp1H58)
 - Open Policy Agent Intro @ KubeCon EU 2021: [Video](https://www.youtube.com/watch?v=2CgeiWkliaw)
 - Using Open Policy Agent to Meet Evolving Policy Requirements @ KubeCon NA 2020: [video](https://www.youtube.com/watch?v=zVuM7F_BTyc)
 - Applying Policy Throughout The Application Lifecycle with Open Policy Agent @ CloudNativeCon 2019: [video](https://www.youtube.com/watch?v=cXfsaE6RKfc)

@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -24,35 +25,74 @@ type Info struct {
 	Signatures  bundle.SignaturesConfig  `json:"signatures_config,omitempty"`
 	WasmModules []map[string]interface{} `json:"wasm_modules,omitempty"`
 	Namespaces  map[string][]string      `json:"namespaces,omitempty"`
+	Annotations []*ast.AnnotationsRef    `json:"annotations,omitempty"`
 }
 
-func File(path string) (*Info, error) {
-	b, err := loader.NewFileLoader().WithSkipBundleVerification(true).AsBundle(path)
+func File(path string, includeAnnotations bool) (*Info, error) {
+	b, err := loader.NewFileLoader().
+		WithSkipBundleVerification(true).
+		WithProcessAnnotation(true). // Always process annotations, for enriching namespace listing
+		WithJSONOptions(&ast.JSONOptions{
+			MarshalOptions: ast.JSONMarshalOptions{
+				IncludeLocation: ast.NodeToggle{
+					// Annotation location data is only included if includeAnnotations is set
+					AnnotationsRef: includeAnnotations,
+				},
+			},
+		}).
+		AsBundle(path)
 	if err != nil {
 		return nil, err
 	}
 
 	bi := &Info{Manifest: b.Manifest}
 
-	namespaces := map[string][]string{}
+	namespaces := make(map[string][]string, len(b.Modules))
+	modules := make([]*ast.Module, 0, len(b.Modules))
 	for _, m := range b.Modules {
 		namespaces[m.Parsed.Package.Path.String()] = append(namespaces[m.Parsed.Package.Path.String()], filepath.Clean(m.Path))
+		modules = append(modules, m.Parsed)
 	}
 	bi.Namespaces = namespaces
+
+	if includeAnnotations {
+		as, errs := ast.BuildAnnotationSet(modules)
+		if len(errs) > 0 {
+			return nil, errs
+		}
+		flattened := as.Flatten()
+
+		for _, wr := range bi.Manifest.WasmResolvers {
+			if as := wr.Annotations; len(as) > 0 {
+				path, err := ast.PtrRef(ast.DefaultRootDocument, wr.Entrypoint)
+				if err != nil {
+					return nil, fmt.Errorf("failed to parse Wasm entrypoint in manifest: %s", err)
+				}
+				for _, a := range as {
+					ar := ast.NewAnnotationsRef(a)
+					ar.Path = path
+					ar.Location = ast.NewLocation(nil, wr.Module, 0, 0)
+					flattened = flattened.Insert(ar)
+				}
+			}
+		}
+
+		bi.Annotations = flattened
+	}
 
 	err = bi.getBundleDataWasmAndSignatures(path)
 	if err != nil {
 		return nil, err
 	}
 
-	wasmModules := []map[string]interface{}{}
+	wasmModules := make([]map[string]interface{}, 0, len(b.WasmModules))
 	for _, w := range b.WasmModules {
 		wasmModule := map[string]interface{}{
 			"url":  w.URL,
 			"path": w.Path,
 		}
 
-		entrypoints := []string{}
+		var entrypoints []string
 		for _, r := range w.Entrypoints {
 			entrypoints = append(entrypoints, r.String())
 		}
@@ -114,11 +154,11 @@ func (bi *Info) getBundleDataWasmAndSignatures(name string) error {
 
 	for _, f := range descriptors {
 		path := filepath.Clean(f.Path())
-		key := strings.Split(strings.TrimPrefix(path, "/"), "/")
+		key := strings.Split(strings.TrimPrefix(path, string(os.PathSeparator)), string(os.PathSeparator))
 
 		value := path
 		if bl.IsDir {
-			value = f.URL()
+			value = filepath.Clean(f.URL())
 		}
 
 		if len(key) > 1 {

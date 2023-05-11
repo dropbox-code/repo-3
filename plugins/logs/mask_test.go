@@ -541,6 +541,25 @@ func TestMaskRuleMask(t *testing.T) {
 			event: `{"input": {"foo": [{"bar": 1, "baz": 2}]}}`,
 			exp:   `{"input": {"foo": [{"baz": 2}]}, "erased": ["/input/foo/0/bar"]}`,
 		},
+		{
+			note: "erase input: special character in path",
+			ptr: &maskRule{
+				OP:   maskOPRemove,
+				Path: "/input/:path",
+			},
+			event: `{"input": {"bar": 1, ":path": "token"}}`,
+			exp:   `{"input": {"bar": 1}, "erased": ["/input/:path"]}`,
+		},
+		{
+			note: "upsert input: special character in path",
+			ptr: &maskRule{
+				OP:    maskOPUpsert,
+				Path:  "/input/:path",
+				Value: "upserted",
+			},
+			event: `{"input": {"bar": 1, ":path": "token"}}`,
+			exp:   `{"input": {"bar": 1, ":path": "upserted"}, "masked": ["/input/:path"]}`,
+		},
 	}
 
 	for _, tc := range tests {
@@ -588,37 +607,34 @@ func TestMaskRuleMask(t *testing.T) {
 
 func TestNewMaskRuleSet(t *testing.T) {
 	tests := []struct {
-		onRuleError func(*maskRule, error)
-		note        string
-		value       interface{}
-		exp         *maskRuleSet
-		err         error
+		note  string
+		value interface{}
+		exp   *maskRuleSet
+		err   error
 	}{
 		{
-			onRuleError: func(mRule *maskRule, err error) {},
-			note:        "invalid format: not []interface{}",
-			value:       map[string]int{"invalid": 1},
-			err:         fmt.Errorf("json: cannot unmarshal object into Go value of type []interface {}"),
+			note:  "invalid format: not []interface{}",
+			value: map[string]int{"invalid": 1},
+			err:   fmt.Errorf("unexpected rule format map[invalid:1] (map[string]int)"),
 		},
 		{
-			onRuleError: func(mRule *maskRule, err error) {},
-			note:        "invalid format: nested type not string or map[string]interface{}",
+			note: "invalid format: nested type not string or map[string]interface{}",
 			value: []interface{}{
 				[]int{1, 2},
 			},
-			err: fmt.Errorf("invalid mask rule format encountered: []interface {}"),
+			err: fmt.Errorf("invalid mask rule format encountered: []int"),
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.note, func(t *testing.T) {
-
 			_, err := newMaskRuleSet(tc.value, func(mRule *maskRule, err error) {})
-
 			if err != nil {
-				if tc.err.Error() != err.Error() {
-					t.Fatalf("Expected: %s\nGot: %s", tc.err.Error(), err.Error())
+				if exp, act := tc.err.Error(), err.Error(); exp != act {
+					t.Fatalf("Expected: %s\nGot: %s", exp, act)
 				}
+			} else if tc.err != nil {
+				t.Errorf("expected error %v, got nil", tc.err)
 			}
 		})
 	}

@@ -68,7 +68,7 @@ Here is an example policy from the [rule-indexing blog](https://blog.openpolicya
 ```live:indexed:module:openable
 package indexed
 
-default allow = false
+default allow := false
 
 allow {
     some user
@@ -132,7 +132,6 @@ For `glob.match(pattern, delimiter, match)` statements to be indexed the pattern
 | `glob.match("foo:**:bar", [":"], input.x)` | no | pattern contains `**` |
 | `glob.match("foo:*:bar", [":"], input.x[i])` | no | match contains variable(s) |
 
-
 ### Early Exit in Rule Evaluation
 
 In general, OPA has to iterate all potential variable bindings to determine the outcome
@@ -168,31 +167,37 @@ package earlyexit.examples
 # p, q, r and s could be evaluated with early-exit semantics:
 
 p {
-  # ...
+    # ...
 }
-q = 123 {
-  # ...
+
+q := 123 {
+    # ...
 }
-r = {"hello": "world"} {
-  # ...
+
+r := {"hello": "world"} {
+    # ...
 }
-s(x) = 12 {
-  # ...
+
+s(x) := 12 {
+    # ...
 }
 
 # u, v, w, and y could _not_
 
 u[x] { # not a complete document rule, but a partial set
-  x := 911
+    x := 911
 }
-v = x { # x is a variable, not ground
-  x := true
+
+v := x { # x is a variable, not ground
+    x := true
 }
-w = { "foo": x } { # a compound term containing a variable
-  x := "bar"
+
+w := { "foo": x } { # a compound term containing a variable
+    x := "bar"
 }
-y(z) = r { # variable value, not ground
-  r := z + 1
+
+y(z) := r { # variable value, not ground
+    r := z + 1
 }
 ```
 
@@ -212,9 +217,9 @@ Since there's no possibility that could change the outcome of `data.earlyexit.it
 once a variable binding is found that satisfies the conditions, no further iteration will
 occur.
 
-The check if "early exit" is applicable for a query happens _after_ the indexing lookup,
-so in this contrived example, an evaluation with input `{"user": "alice"}` _would_ exit
-early; an evaluation with `{"user": "bob", "group": "admins"}` _would not_:
+The check if "early exit" is applicable for a query happens *after* the indexing lookup,
+so in this contrived example, an evaluation with input `{"user": "alice"}` *would* exit
+early; an evaluation with `{"user": "bob", "group": "admins"}` *would not*:
 
 ```live:eeindex:module:read_only
 package earlyexit
@@ -231,7 +236,7 @@ allow {
 ```
 
 This is because the index lookup for `{"user": "bob", "group": "admins"}` returns two complete
-document rules with _different values_, `true` and `false`, whereas the indexer query for
+document rules with *different values*, `true` and `false`, whereas the indexer query for
 `{"user": "alice"}` only returns rules with value `true`.
 
 ### Comprehension Indexing
@@ -294,25 +299,25 @@ ports := [port | some j; input.exposed[j].interface == intf; port := input.expos
 
 Without comprehension indexing, this query would be O(n^2) where n is the size of `input.exposed`.
 However, with comprehension indexing, the query remains O(n) because OPA only computes the comprehension
-_once_. In this case, the comprehension is evaluated and all possible values of `ports` are computed
+*once*. In this case, the comprehension is evaluated and all possible values of `ports` are computed
 at once. These values are indexed by the assignments of `intf`.
 
 To implement the policy above we could write:
 
 ```rego
 deny[msg] {
-  some i
-  count(exposed_ports_by_interface[i]) > 100
-  msg := sprintf("interface '%v' exposes too many ports", [i])
+    some i
+    count(exposed_ports_by_interface[i]) > 100
+    msg := sprintf("interface '%v' exposes too many ports", [i])
 }
 
 exposed_ports_by_interface := {intf: ports |
-  some i
-  intf := input.exposed[i].interface
-  ports := [port |
-    some j
-    input.exposed[j].interface == intf
-    port := input.exposed[j].port
+    some i
+    intf := input.exposed[i].interface
+    ports := [port |
+        some j
+        input.exposed[j].interface == intf
+        port := input.exposed[j].port
   ]
 }
 ```
@@ -377,28 +382,69 @@ not_indexed_because_nested_closure {
 
 ### Profiling
 
-You can also _profile_ your policies using `opa eval`. The profiler is useful if you need to understand
+You can also *profile* your policies using `opa eval`. The profiler is useful if you need to understand
 why policy evaluation is slow.
 
 The `opa eval` command provides the following profiler options:
 
-| Option | Detail | Default |
-| --- | --- | --- |
-| <span class="opa-keep-it-together">`--profile`</span> | Enables expression profiling and outputs profiler results. | off |
-| <span class="opa-keep-it-together">`--profile-sort`</span> | Criteria to sort the expression profiling results. This options implies `--profile`. | total_time_ns => num_eval => num_redo => file => line |
-| <span class="opa-keep-it-together">`--profile-limit`</span> | Desired number of profiling results sorted on the given criteria. This options implies `--profile`. | 10 |
-| <span class="opa-keep-it-together">`--count`</span> | Desired number of evaluations that profiling metrics are to be captured for. With `--format=pretty`, the output will contain min, max, mean and the 90th and 99th percentile. All collected percentiles can be found in the JSON output. | 1 |
+| Option | Detail | Default                                                               |
+| --- | --- |-----------------------------------------------------------------------|
+| <span class="opa-keep-it-together">`--profile`</span> | Enables expression profiling and outputs profiler results. | off                                                                   |
+| <span class="opa-keep-it-together">`--profile-sort`</span> | Criteria to sort the expression profiling results. This options implies `--profile`. | total_time_ns => num_eval => num_redo => num_gen_expr => file => line |
+| <span class="opa-keep-it-together">`--profile-limit`</span> | Desired number of profiling results sorted on the given criteria. This options implies `--profile`. | 10                                                                    |
+| <span class="opa-keep-it-together">`--count`</span> | Desired number of evaluations that profiling metrics are to be captured for. With `--format=pretty`, the output will contain min, max, mean and the 90th and 99th percentile. All collected percentiles can be found in the JSON output. | 1                                                                     |
 
 #### Sort criteria for the profile results
 
-  * `total_time_ns` - Results are displayed is decreasing order of _expression evaluation time_
-  * `num_eval`  - Results are displayed is decreasing order of _number of times an expression is evaluated_
-  * `num_redo`  - Results are displayed is decreasing order of _number of times an expression is re-evaluated(redo)_
-  * `file`  - Results are sorted in reverse alphabetical order based on the _rego source filename_
-  * `line`  - Results are displayed is decreasing order of _expression line number_ in the source file
+* `total_time_ns` - Results are displayed is decreasing order of *expression evaluation time*
+* `num_eval`  - Results are displayed is decreasing order of *number of times an expression is evaluated*
+* `num_redo`  - Results are displayed is decreasing order of *number of times an expression is re-evaluated(redo)*
+* `num_gen_expr`  - Results are displayed is decreasing order of *number of generated expressions*
+* `file`  - Results are sorted in reverse alphabetical order based on the *rego source filename*
+* `line`  - Results are displayed is decreasing order of *expression line number* in the source file
 
 When the sort criteria is not provided `total_time_ns` has the **highest** priority
 while `line` has the **lowest**.
+
+The `num_gen_expr` represents the number of expressions generated for a given statement on a particular line. For example,
+let's take the following policy:
+
+```rego
+package test
+
+p {
+	a := 1
+	b := 2
+	c := 3
+	x = a + b * c
+}
+```
+
+If we profile the above policy we would get something like the following output:
+
+```ruby
++----------+----------+----------+--------------+-------------+
+|   TIME   | NUM EVAL | NUM REDO | NUM GEN EXPR |  LOCATION   |
++----------+----------+----------+--------------+-------------+
+| 20.291µs | 3        | 3        | 3            | test.rego:7 |
+| 1µs      | 1        | 1        | 1            | test.rego:6 |
+| 2.333µs  | 1        | 1        | 1            | test.rego:5 |
+| 6.333µs  | 1        | 1        | 1            | test.rego:4 |
+| 84.75µs  | 1        | 1        | 1            | data        |
++----------+----------+----------+--------------+-------------+
+```
+
+The first entry indicates that line `test.rego:7` has a `EVAL/REDO` count of `3`. If we look at the expression on line `test.rego:7`
+ie `x = a + b * c` it's not immediately clear why this line has a `EVAL/REDO` count of `3`. But we also notice that there
+are `3` generated expressions (ie. `NUM GEN EXPR`) at line `test.rego:7`. This is because the compiler rewrites the above policy to
+something like below:
+
+`p = true { __local0__ = 1; __local1__ = 2; __local2__ = 3; mul(__local1__, __local2__, __local3__); plus(__local0__, __local3__, __local4__); x = __local4__ }`
+
+And that line `test.rego:7` is rewritten to `mul(__local1__, __local2__, __local3__); plus(__local0__, __local3__, __local4__); x = __local4__` which
+results in a `NUM GEN EXPR` count of `3`. Hence the `NUM GEN EXPR` count can help to better understand the `EVAL/REDO` counts
+for a given expression and also provide more clarity into the profile results and how policy evaluation works.
+
 
 #### Example Policy
 
@@ -411,40 +457,40 @@ package rbac
 # Example input request
 
 input := {
-	"subject": "bob",
-	"resource": "foo123",
-	"action": "write",
+ "subject": "bob",
+ "resource": "foo123",
+ "action": "write",
 }
 
 # Example RBAC configuration.
 bindings := [
-	{
-		"user": "alice",
-		"roles": ["dev", "test"],
-	},
-	{
-		"user": "bob",
-		"roles": ["test"],
-	},
+ {
+  "user": "alice",
+  "roles": ["dev", "test"],
+ },
+ {
+  "user": "bob",
+  "roles": ["test"],
+ },
 ]
 
 roles := [
-	{
-		"name": "dev",
-		"permissions": [
-			{"resource": "foo123", "action": "write"},
-			{"resource": "foo123", "action": "read"},
-		],
-	},
-	{
-		"name": "test",
-		"permissions": [{"resource": "foo123", "action": "read"}],
-	},
+ {
+  "name": "dev",
+  "permissions": [
+   {"resource": "foo123", "action": "write"},
+   {"resource": "foo123", "action": "read"},
+  ],
+ },
+ {
+  "name": "test",
+  "permissions": [{"resource": "foo123", "action": "read"}],
+ },
 ]
 
 # Example RBAC policy implementation.
 
-default allow = false
+default allow := false
 
 allow {
     some role_name
@@ -474,23 +520,24 @@ opa eval --data rbac.rego --profile --format=pretty 'data.rbac.allow'
 ```
 
 **Sample Output**
+
 ```ruby
 false
 
-+----------+----------+----------+-----------------+
-|   TIME   | NUM EVAL | NUM REDO |    LOCATION     |
-+----------+----------+----------+-----------------+
-| 47.148µs | 1        | 1        | data.rbac.allow |
-| 28.965µs | 1        | 1        | rbac.rego:11    |
-| 24.384µs | 1        | 1        | rbac.rego:41    |
-| 23.064µs | 2        | 1        | rbac.rego:47    |
-| 15.525µs | 1        | 1        | rbac.rego:38    |
-| 14.137µs | 1        | 2        | rbac.rego:46    |
-| 13.927µs | 1        | 0        | rbac.rego:42    |
-| 13.568µs | 1        | 1        | rbac.rego:55    |
-| 12.982µs | 1        | 0        | rbac.rego:56    |
-| 12.763µs | 1        | 2        | rbac.rego:52    |
-+----------+----------+----------+-----------------+
++----------+----------+----------+--------------+-----------------+
+|   TIME   | NUM EVAL | NUM REDO | NUM GEN EXPR |    LOCATION     |
++----------+----------+----------+--------------+-----------------+
+| 47.148µs | 1        | 1        | 1            | data.rbac.allow |
+| 28.965µs | 1        | 1        | 1            | rbac.rego:11    |
+| 24.384µs | 1        | 1        | 1            | rbac.rego:41    |
+| 23.064µs | 2        | 1        | 1            | rbac.rego:47    |
+| 15.525µs | 1        | 1        | 1            | rbac.rego:38    |
+| 14.137µs | 1        | 2        | 1            | rbac.rego:46    |
+| 13.927µs | 1        | 0        | 1            | rbac.rego:42    |
+| 13.568µs | 1        | 1        | 1            | rbac.rego:55    |
+| 12.982µs | 1        | 0        | 1            | rbac.rego:56    |
+| 12.763µs | 1        | 2        | 1            | rbac.rego:52    |
++----------+----------+----------+--------------+-----------------+
 
 +------------------------------+----------+
 |            METRIC            |  VALUE   |
@@ -501,18 +548,19 @@ false
 | timer_rego_query_parse_ns    | 12337169 |
 +------------------------------+----------+
 ```
+
 As seen from the above table, all results are displayed. The profile results are
 sorted on the default sort criteria.
 
 To evaluation the policy multiple times, and aggregate the profiling data over those
 runs, pass `--count=NUMBER`:
 
-
 ```bash
 opa eval --data rbac.rego --profile --format=pretty --count=10 'data.rbac.allow'
 ```
 
 **Sample Output**
+
 ```ruby
 false
 +------------------------------+---------+----------+---------------+----------------+---------------+
@@ -525,20 +573,20 @@ false
 | timer_rego_query_eval_ns     | 161812  | 1198092  | 637754        | 1.1846622e+06  | 1.198092e+06  |
 | timer_rego_query_parse_ns    | 6078    | 6078     | 6078          | 6078           | 6078          |
 +------------------------------+---------+----------+---------------+----------------+---------------+
-+----------+-------------+-------------+-------------+-------------+----------+----------+-----------------+
-|   MIN    |     MAX     |    MEAN     |     90%     |     99%     | NUM EVAL | NUM REDO |    LOCATION     |
-+----------+-------------+-------------+-------------+-------------+----------+----------+-----------------+
-| 43.875µs | 26.135469ms | 11.494512ms | 25.746215ms | 26.135469ms | 1        | 1        | data.rbac.allow |
-| 21.478µs | 211.461µs   | 98.102µs    | 205.72µs    | 211.461µs   | 1        | 1        | rbac.rego:13    |
-| 19.652µs | 123.537µs   | 73.161µs    | 122.75µs    | 123.537µs   | 1        | 1        | rbac.rego:40    |
-| 12.303µs | 117.277µs   | 61.59µs     | 116.733µs   | 117.277µs   | 2        | 1        | rbac.rego:50    |
-| 12.224µs | 93.214µs    | 51.289µs    | 92.217µs    | 93.214µs    | 1        | 1        | rbac.rego:44    |
-| 5.561µs  | 84.121µs    | 43.002µs    | 83.469µs    | 84.121µs    | 1        | 1        | rbac.rego:51    |
-| 5.56µs   | 71.712µs    | 36.545µs    | 71.158µs    | 71.712µs    | 1        | 0        | rbac.rego:45    |
-| 4.958µs  | 66.04µs     | 33.161µs    | 65.636µs    | 66.04µs     | 1        | 2        | rbac.rego:49    |
-| 4.326µs  | 65.836µs    | 30.461µs    | 65.083µs    | 65.836µs    | 1        | 1        | rbac.rego:6     |
-| 3.948µs  | 43.399µs    | 24.167µs    | 43.055µs    | 43.399µs    | 1        | 2        | rbac.rego:55    |
-+----------+-------------+-------------+-------------+-------------+----------+----------+-----------------+
++----------+-------------+-------------+-------------+-------------+----------+----------+--------------+------------------+
+|   MIN    |     MAX     |    MEAN     |     90%     |     99%     | NUM EVAL | NUM REDO | NUM GEN EXPR |     LOCATION     |
++----------+-------------+-------------+-------------+-------------+----------+----------+--------------+------------------+
+| 43.875µs | 26.135469ms | 11.494512ms | 25.746215ms | 26.135469ms | 1        | 1        | 1            | data.rbac.allow  |
+| 21.478µs | 211.461µs   | 98.102µs    | 205.72µs    | 211.461µs   | 1        | 1        | 1            | rbac.rego:13     |
+| 19.652µs | 123.537µs   | 73.161µs    | 122.75µs    | 123.537µs   | 1        | 1        | 1            | rbac.rego:40     |
+| 12.303µs | 117.277µs   | 61.59µs     | 116.733µs   | 117.277µs   | 2        | 1        | 1            | rbac.rego:50     |
+| 12.224µs | 93.214µs    | 51.289µs    | 92.217µs    | 93.214µs    | 1        | 1        | 1            | rbac.rego:44     |
+| 5.561µs  | 84.121µs    | 43.002µs    | 83.469µs    | 84.121µs    | 1        | 1        | 1            | rbac.rego:51     |
+| 5.56µs   | 71.712µs    | 36.545µs    | 71.158µs    | 71.712µs    | 1        | 0        | 1            | rbac.rego:45     |
+| 4.958µs  | 66.04µs     | 33.161µs    | 65.636µs    | 66.04µs     | 1        | 2        | 1            | rbac.rego:49     |
+| 4.326µs  | 65.836µs    | 30.461µs    | 65.083µs    | 65.836µs    | 1        | 1        | 1            | rbac.rego:6      |
+| 3.948µs  | 43.399µs    | 24.167µs    | 43.055µs    | 43.399µs    | 1        | 2        | 1            | rbac.rego:55     |
++----------+-------------+-------------+-------------+-------------+----------+----------+--------------+------------------+
 ```
 
 ##### Example: Display top `5` profile results
@@ -548,17 +596,19 @@ opa eval --data rbac.rego --profile-limit 5 --format=pretty 'data.rbac.allow'
 ```
 
 **Sample Output**
+
 ```ruby
-+----------+----------+----------+-----------------+
-|   TIME   | NUM EVAL | NUM REDO |    LOCATION     |
-+----------+----------+----------+-----------------+
-| 46.329µs | 1        | 1        | data.rbac.allow |
-| 26.656µs | 1        | 1        | rbac.rego:11    |
-| 24.206µs | 2        | 1        | rbac.rego:47    |
-| 23.235µs | 1        | 1        | rbac.rego:41    |
-| 18.242µs | 1        | 1        | rbac.rego:38    |
-+----------+----------+----------+-----------------+
++----------+----------+----------+--------------+-----------------+
+|   TIME   | NUM EVAL | NUM REDO | NUM GEN EXPR |     LOCATION    |
++----------+----------+----------+--------------+-----------------+
+| 46.329µs | 1        | 1        | 1            | data.rbac.allow |
+| 26.656µs | 1        | 1        | 1            | rbac.rego:11    |
+| 24.206µs | 2        | 1        | 1            | rbac.rego:47    |
+| 23.235µs | 1        | 1        | 1            | rbac.rego:41    |
+| 18.242µs | 1        | 1        | 1            | rbac.rego:38    |
++----------+----------+----------+--------------+-----------------+
 ```
+
 The profile results are sorted on the default sort criteria.
 Also `--profile` option is implied and does not need to be provided.
 
@@ -569,17 +619,19 @@ opa  eval --data rbac.rego --profile-limit 5 --profile-sort num_eval --format=pr
 ```
 
 **Sample Profile Output**
+
 ```ruby
-+----------+----------+----------+-----------------+
-|   TIME   | NUM EVAL | NUM REDO |    LOCATION     |
-+----------+----------+----------+-----------------+
-| 26.675µs | 2        | 1        | rbac.rego:47    |
-| 9.274µs  | 2        | 1        | rbac.rego:53    |
-| 43.356µs | 1        | 1        | data.rbac.allow |
-| 22.467µs | 1        | 1        | rbac.rego:41    |
-| 22.425µs | 1        | 1        | rbac.rego:11    |
-+----------+----------+----------+-----------------+
++----------+----------+----------+--------------+-----------------+
+|   TIME   | NUM EVAL | NUM REDO | NUM GEN EXPR |    LOCATION     |
++----------+----------+----------+--------------+-----------------+
+| 26.675µs | 2        | 1        | 1            | rbac.rego:47    |
+| 9.274µs  | 2        | 1        | 1            | rbac.rego:53    |
+| 43.356µs | 1        | 1        | 1            | data.rbac.allow |
+| 22.467µs | 1        | 1        | 1            | rbac.rego:41    |
+| 22.425µs | 1        | 1        | 1            | rbac.rego:11    |
++----------+----------+----------+--------------+-----------------+
 ```
+
 As seen from the above table, the results are arranged first in decreasing
 order of number of evaluations and if two expressions have been evaluated
 the same number of times, the default criteria is used since no other sort criteria is provided.
@@ -593,40 +645,46 @@ opa eval --data rbac.rego --profile-limit 5 --profile-sort num_eval,num_redo --f
 ```
 
 **Sample Profile Output**
+
 ```ruby
-+----------+----------+----------+-----------------+
-|   TIME   | NUM EVAL | NUM REDO |    LOCATION     |
-+----------+----------+----------+-----------------+
-| 22.892µs | 2        | 1        | rbac.rego:47    |
-| 8.831µs  | 2        | 1        | rbac.rego:53    |
-| 13.767µs | 1        | 2        | rbac.rego:46    |
-| 10.78µs  | 1        | 2        | rbac.rego:52    |
-| 42.338µs | 1        | 1        | data.rbac.allow |
-+----------+----------+----------+-----------------+
++----------+----------+----------+--------------+-----------------+
+|   TIME   | NUM EVAL | NUM REDO | NUM GEN EXPR |    LOCATION     |
++----------+----------+----------+--------------+-----------------+
+| 22.892µs | 2        | 1        | 1            | rbac.rego:47    |
+| 8.831µs  | 2        | 1        | 1            | rbac.rego:53    |
+| 13.767µs | 1        | 2        | 1            | rbac.rego:46    |
+| 10.78µs  | 1        | 2        | 1            | rbac.rego:52    |
+| 42.338µs | 1        | 1        | 1            | data.rbac.allow |
++----------+----------+----------+--------------+-----------------+
 ```
-As seen from the above table, result are first arranged based on _number of evaluations_,
-then _number of re-evaluations_ and finally the default criteria is used.
+
+As seen from the above table, result are first arranged based on *number of evaluations*,
+then *number of re-evaluations* and finally the default criteria is used.
 In this case, total_time_ns => file => line.
 The `--profile-sort` options accepts repeated or comma-separated values for the criteria.
 The order of the criteria on the command line determine their priority.
 
 Another way to get the same output as above would be the following:
+
 ```bash
 opa eval --data rbac.rego --profile-limit 5 --profile-sort num_eval --profile-sort num_redo --format=pretty 'data.rbac.allow'
 ```
 
 ## Benchmarking Queries
+
 OPA provides CLI options to benchmark a single query via the `opa bench` command. This will evaluate similarly to
 `opa eval` but it will repeat the evaluation (in its most efficient form) a number of times and report metrics.
 
-
 #### Example: Benchmark rbac allow
+
 Using the same [policy source as shown above](#example-policy):
+
 ```bash
-$ opa bench --data rbac.rego 'data.rbac.allow'
+opa bench --data rbac.rego 'data.rbac.allow'
 ```
 
 Will result in an output similar to:
+
 ```
 +-------------------------------------------+------------+
 | samples                                   |      27295 |
@@ -654,12 +712,12 @@ to evaluate (loading, parsing, compiling, etc.) is omitted.
 > Note: all `*/op` results are an average over the number of `samples` (or `N` in the JSON format)
 
 #### Options for `opa bench`
+
 | Option | Detail | Default |
 | --- | --- | --- |
 | <span class="opa-keep-it-together">`--benchmem`</span> | Report memory allocations with benchmark results. | true |
 | <span class="opa-keep-it-together">`--metrics`</span> | Report additional query performance metrics. | true |
 | <span class="opa-keep-it-together">`--count`</span> | Number of times to repeat the benchmark. | 1 |
-
 
 ### Benchmarking OPA Tests
 
@@ -669,13 +727,14 @@ will typically be longer than what is seen with `opa bench`. The primary use-cas
 track relative time as policies change.
 
 #### Options for `opa test --bench`
+
 | Option | Detail | Default |
 | --- | --- | --- |
 | <span class="opa-keep-it-together">`--benchmem`</span> | Report memory allocations with benchmark results. | true |
 | <span class="opa-keep-it-together">`--count`</span> | Number of times to repeat the benchmark. | 1 |
 
-
 #### Example Tests
+
 Adding a unit test file for the [policy source as shown above](#example-policy):
 
 ```rego
@@ -692,6 +751,7 @@ test_user_has_role_negative {
 ```
 
 Which when run normally will output something like:
+
 ```
 $ opa test -v ./rbac.rego ./rbac_test.rego
 data.rbac.test_user_has_role_dev: PASS (605.076µs)
@@ -705,33 +765,40 @@ PASS: 2/2
 ```bash
 opa test -v --bench ./rbac.rego ./rbac_test.rego
 ```
+
 Results in output:
+
 ```
-data.rbac.test_user_has_role_dev	   44749	     27677 ns/op	     23146 timer_rego_query_eval_ns/op	   12303 B/op	     229 allocs/op
-data.rbac.test_user_has_role_negative	   44526	     26348 ns/op	     22033 timer_rego_query_eval_ns/op	   12470 B/op	     235 allocs/op
+data.rbac.test_user_has_role_dev    44749      27677 ns/op      23146 timer_rego_query_eval_ns/op    12303 B/op      229 allocs/op
+data.rbac.test_user_has_role_negative    44526      26348 ns/op      22033 timer_rego_query_eval_ns/op    12470 B/op      235 allocs/op
 --------------------------------------------------------------------------------
 PASS: 2/2
 ```
 
 #### Example: Benchmark rbac unit tests and compare with `benchstat`
+
 The benchmark output formats default to `pretty`, but support a `gobench` format which complies with the
 [Golang Benchmark Data Format](https://go.googlesource.com/proposal/+/master/design/14313-benchmark-format.md).
 This allows for usage of tools like [benchstat](https://godoc.org/golang.org/x/perf/cmd/benchstat) to gain additional
 insight into the benchmark results and to diff between benchmark results.
 
 Example:
+
 ```bash
 opa test -v --bench --count 10 --format gobench ./rbac.rego ./rbac_test.rego | tee ./old.txt
 ```
+
 Will result in an `old.txt` and output similar to:
+
 ```
-BenchmarkDataRbacTestUserHasRoleDev	   45152	     26323 ns/op	     22026 timer_rego_query_eval_ns/op	   12302 B/op	     229 allocs/op
-BenchmarkDataRbacTestUserHasRoleNegative	   45483	     26253 ns/op	     21986 timer_rego_query_eval_ns/op	   12470 B/op	     235 allocs/op
+BenchmarkDataRbacTestUserHasRoleDev    45152      26323 ns/op      22026 timer_rego_query_eval_ns/op    12302 B/op      229 allocs/op
+BenchmarkDataRbacTestUserHasRoleNegative    45483      26253 ns/op      21986 timer_rego_query_eval_ns/op    12470 B/op      235 allocs/op
 --------------------------------------------------------------------------------
 PASS: 2/2
 .
 .
 ```
+
 Repeated 10 times (as specified by the `--count` flag).
 
 This format can then be loaded by `benchstat`:
@@ -739,7 +806,9 @@ This format can then be loaded by `benchstat`:
 ```bash
 benchstat ./old.txt
 ```
+
 Output:
+
 ```
 name                             time/op
 DataRbacTestUserHasRoleDev                       29.8µs ±18%
@@ -763,14 +832,16 @@ If later on a change was introduced that altered the performance we can run agai
 ```bash
 opa test -v --bench --count 10 --format gobench ./rbac.rego ./rbac_test.rego | tee ./new.txt
 ```
+
 ```
-BenchmarkDataRbacTestUserHasRoleDev	   27415	     43671 ns/op	     39301 timer_rego_query_eval_ns/op	   17201 B/op	     379 allocs/op
-BenchmarkDataRbacTestUserHasRoleNegative	   27583	     44743 ns/op	     40152 timer_rego_query_eval_ns/op	   17369 B/op	     385 allocs/op
+BenchmarkDataRbacTestUserHasRoleDev    27415      43671 ns/op      39301 timer_rego_query_eval_ns/op    17201 B/op      379 allocs/op
+BenchmarkDataRbacTestUserHasRoleNegative    27583      44743 ns/op      40152 timer_rego_query_eval_ns/op    17369 B/op      385 allocs/op
 --------------------------------------------------------------------------------
 PASS: 2/2
 .
 .
 ```
+
 (Repeated 10 times)
 
 Then we can compare the results via:
@@ -778,6 +849,7 @@ Then we can compare the results via:
 ```bash
 benchstat ./old.txt ./new.txt
 ```
+
 ```
 name                             old time/op                      new time/op                      delta
 DataRbacTestUserHasRoleDev                           29.8µs ±18%                      47.4µs ±15%  +59.06%  (p=0.000 n=9+10)
@@ -826,11 +898,13 @@ loading 10,000 rules that implement an ACL-style authorization policy consumes a
 130MB of RAM while 100,000 rules implementing the same policy (but with 10x more tuples to check)
 consumes approximately 1.1GB of RAM.
 
+By default, OPA stores policy and data in-memory. OPA's disk storage feature allows policy and data to be stored on disk. See [this](../storage/#disk) for more details.
+
 ## Optimization Levels
 
 The `--optimize` (or `-O`) flag on the `opa build` command controls how bundles are optimized.
 
-> Optimization applies partial evaluation to precompute _known_ values in the policy. The goal of
+> Optimization applies partial evaluation to precompute *known* values in the policy. The goal of
 partial evaluation is to convert non-linear-time policies into linear-time policies.
 
 By specifying the `--optimize` flag, users can control how much time and resources are spent
@@ -847,7 +921,7 @@ By default optimizations are disabled.
 Policies are partially evaluated. Rules that DO NOT depend on unknowns (directly or indirectly) are
 evaluated and the virtual documents they produce are inlined into call sites. Virtual documents that
 are required at evaluation time are not inlined. For example, if a base or virtual document is
-targetted by a `with` statement in the policy, the document will not be inlined.
+targeted by a `with` statement in the policy, the document will not be inlined.
 
 Rules that depend on unknowns (directly or indirectly) are also partially evaluated however the
 virtual documents they produce ARE NOT inlined into call sites. The output policy should be structurally
@@ -874,4 +948,3 @@ For high-performance use cases:
 * Write your policies with indexed statements so that [rule-indexing](https://blog.openpolicyagent.org/optimizing-opa-rule-indexing-59f03f17caf3) is effective.
 * Use the profiler to help identify portions of the policy that would benefit the most from improved performance.
 * Use the benchmark tools to help get real world timing data and detect policy performance changes.
-

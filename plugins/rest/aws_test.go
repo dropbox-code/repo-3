@@ -5,9 +5,11 @@
 package rest
 
 import (
+	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,9 +18,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/open-policy-agent/opa/util/test"
-
+	"github.com/open-policy-agent/opa/internal/providers/aws"
 	"github.com/open-policy-agent/opa/logging"
+	"github.com/open-policy-agent/opa/util/test"
 )
 
 // this is usually private; but we need it here
@@ -30,12 +32,21 @@ type metadataPayload struct {
 	Expiration      time.Time
 }
 
-// quicky and dirty assertions
+// quick and dirty assertions
 func assertEq(expected string, actual string, t *testing.T) {
 	t.Helper()
 	if actual != expected {
 		t.Error("expected: ", expected, " but got: ", actual)
 	}
+}
+func assertIn(candidates []string, actual string, t *testing.T) {
+	t.Helper()
+	for _, expected := range candidates {
+		if actual == expected {
+			return
+		}
+	}
+	t.Error("value: '", actual, "' not found in: ", candidates)
 }
 
 func assertErr(expected string, actual error, t *testing.T) {
@@ -46,33 +57,23 @@ func assertErr(expected string, actual error, t *testing.T) {
 }
 
 func TestEnvironmentCredentialService(t *testing.T) {
-	reset := func() {
-		os.Unsetenv("AWS_ACCESS_KEY_ID")
-		os.Unsetenv("AWS_SECRET_ACCESS_KEY")
-		os.Unsetenv("AWS_REGION")
-		os.Unsetenv("AWS_SECURITY_TOKEN")
-		os.Unsetenv("AWS_SESSION_TOKEN")
-	}
-	reset()
-	t.Cleanup(reset) // reset again when we're done
-
 	cs := &awsEnvironmentCredentialService{}
 
 	// wrong path: some required environment is missing
-	_, err := cs.credentials()
+	_, err := cs.credentials(context.Background())
 	assertErr("no AWS_ACCESS_KEY_ID set in environment", err, t)
 
-	os.Setenv("AWS_ACCESS_KEY_ID", "MYAWSACCESSKEYGOESHERE")
-	_, err = cs.credentials()
+	t.Setenv("AWS_ACCESS_KEY_ID", "MYAWSACCESSKEYGOESHERE")
+	_, err = cs.credentials(context.Background())
 	assertErr("no AWS_SECRET_ACCESS_KEY set in environment", err, t)
 
-	os.Setenv("AWS_SECRET_ACCESS_KEY", "MYAWSSECRETACCESSKEYGOESHERE")
-	_, err = cs.credentials()
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "MYAWSSECRETACCESSKEYGOESHERE")
+	_, err = cs.credentials(context.Background())
 	assertErr("no AWS_REGION set in environment", err, t)
 
-	os.Setenv("AWS_REGION", "us-east-1")
+	t.Setenv("AWS_REGION", "us-east-1")
 
-	expectedCreds := awsCredentials{
+	expectedCreds := aws.Credentials{
 		AccessKey:    "MYAWSACCESSKEYGOESHERE",
 		SecretKey:    "MYAWSSECRETACCESSKEYGOESHERE",
 		RegionName:   "us-east-1",
@@ -91,10 +92,12 @@ func TestEnvironmentCredentialService(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		os.Setenv(testCase.tokenEnv, testCase.tokenValue)
+		if testCase.tokenEnv != "" {
+			t.Setenv(testCase.tokenEnv, testCase.tokenValue)
+		}
 		expectedCreds.SessionToken = testCase.tokenValue
 
-		envCreds, err := cs.credentials()
+		envCreds, err := cs.credentials(context.Background())
 		if err != nil {
 			t.Error("unexpected error: " + err.Error())
 		}
@@ -138,12 +141,12 @@ aws_secret_access_key=%v
 			Profile:    "foo",
 			RegionName: fooRegion,
 		}
-		creds, err := cs.credentials()
+		creds, err := cs.credentials(context.Background())
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		expected := awsCredentials{
+		expected := aws.Credentials{
 			AccessKey:    fooKey,
 			SecretKey:    fooSecret,
 			RegionName:   fooRegion,
@@ -161,12 +164,12 @@ aws_secret_access_key=%v
 			RegionName: defaultRegion,
 		}
 
-		creds, err = cs.credentials()
+		creds, err = cs.credentials(context.Background())
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		expected = awsCredentials{
+		expected = aws.Credentials{
 			AccessKey:    defaultKey,
 			SecretKey:    defaultSecret,
 			RegionName:   defaultRegion,
@@ -199,23 +202,17 @@ aws_session_token=%s
 	test.WithTempFS(files, func(path string) {
 		cfgPath := filepath.Join(path, "example.ini")
 
-		os.Setenv(awsCredentialsFileEnvVar, cfgPath)
-		os.Setenv(awsProfileEnvVar, profile)
-		os.Setenv(awsRegionEnvVar, defaultRegion)
-
-		t.Cleanup(func() {
-			os.Unsetenv(awsCredentialsFileEnvVar)
-			os.Unsetenv(awsProfileEnvVar)
-			os.Unsetenv(awsRegionEnvVar)
-		})
+		t.Setenv(awsCredentialsFileEnvVar, cfgPath)
+		t.Setenv(awsProfileEnvVar, profile)
+		t.Setenv(awsRegionEnvVar, defaultRegion)
 
 		cs := &awsProfileCredentialService{}
-		creds, err := cs.credentials()
+		creds, err := cs.credentials(context.Background())
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		expected := awsCredentials{
+		expected := aws.Credentials{
 			AccessKey:    defaultKey,
 			SecretKey:    defaultSecret,
 			RegionName:   defaultRegion,
@@ -242,18 +239,11 @@ aws_session_token=%s
 `, defaultKey, defaultSecret, defaultSessionToken)
 
 	files := map[string]string{}
-	oldUserProfile := os.Getenv("USERPROFILE")
-	oldHome := os.Getenv("HOME")
 
 	test.WithTempFS(files, func(path string) {
 
-		os.Setenv("USERPROFILE", path)
-		os.Setenv("HOME", path)
-
-		t.Cleanup(func() {
-			os.Setenv("USERPROFILE", oldUserProfile)
-			os.Setenv("HOME", oldHome)
-		})
+		t.Setenv("USERPROFILE", path)
+		t.Setenv("HOME", path)
 
 		cfgDir := filepath.Join(path, ".aws")
 		err := os.MkdirAll(cfgDir, os.ModePerm)
@@ -261,17 +251,17 @@ aws_session_token=%s
 			t.Fatal(err)
 		}
 
-		if err := ioutil.WriteFile(filepath.Join(cfgDir, "credentials"), []byte(config), 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(cfgDir, "credentials"), []byte(config), 0600); err != nil {
 			t.Fatalf("Unexpected error: %s", err)
 		}
 
 		cs := &awsProfileCredentialService{RegionName: defaultRegion}
-		creds, err := cs.credentials()
+		creds, err := cs.credentials(context.Background())
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		expected := awsCredentials{
+		expected := aws.Credentials{
 			AccessKey:    defaultKey,
 			SecretKey:    defaultSecret,
 			RegionName:   defaultRegion,
@@ -323,7 +313,7 @@ aws_access_key_id=accessKey
 				cs := &awsProfileCredentialService{
 					Path: cfgPath,
 				}
-				_, err := cs.credentials()
+				_, err := cs.credentials(context.Background())
 				if err == nil {
 					t.Fatal("Expected error but got nil")
 				}
@@ -348,7 +338,7 @@ func TestMetadataCredentialService(t *testing.T) {
 		tokenPath:       ts.server.URL + "/latest/api/token",
 		logger:          logging.Get(),
 	}
-	_, err := cs.credentials()
+	_, err := cs.credentials(context.Background())
 	assertErr("unsupported protocol scheme \"\"", err, t)
 
 	// wrong path: no role set but no ECS URI in environment
@@ -357,7 +347,7 @@ func TestMetadataCredentialService(t *testing.T) {
 		RegionName: "us-east-1",
 		logger:     logging.Get(),
 	}
-	_, err = cs.credentials()
+	_, err = cs.credentials(context.Background())
 	assertErr("metadata endpoint cannot be determined from settings and environment", err, t)
 
 	// wrong path: creds not found
@@ -368,7 +358,7 @@ func TestMetadataCredentialService(t *testing.T) {
 		tokenPath:       ts.server.URL + "/latest/api/token",
 		logger:          logging.Get(),
 	}
-	_, err = cs.credentials()
+	_, err = cs.credentials(context.Background())
 	assertErr("metadata HTTP request returned unexpected status: 404 Not Found", err, t)
 
 	// wrong path: malformed JSON body
@@ -379,7 +369,7 @@ func TestMetadataCredentialService(t *testing.T) {
 		tokenPath:       ts.server.URL + "/latest/api/token",
 		logger:          logging.Get(),
 	}
-	_, err = cs.credentials()
+	_, err = cs.credentials(context.Background())
 	assertErr("failed to parse credential response from metadata service: invalid character 'T' looking for beginning of value", err, t)
 
 	// wrong path: token service error
@@ -390,7 +380,7 @@ func TestMetadataCredentialService(t *testing.T) {
 		tokenPath:       ts.server.URL + "/latest/api/missing_token",
 		logger:          logging.Get(),
 	} // will 404
-	_, err = cs.credentials()
+	_, err = cs.credentials(context.Background())
 	assertErr("metadata token HTTP request returned unexpected status: 404 Not Found", err, t)
 
 	// wrong path: token service returns bad token
@@ -401,7 +391,7 @@ func TestMetadataCredentialService(t *testing.T) {
 		tokenPath:       ts.server.URL + "/latest/api/bad_token",
 		logger:          logging.Get(),
 	} // not good
-	_, err = cs.credentials()
+	_, err = cs.credentials(context.Background())
 	assertErr("metadata HTTP request returned unexpected status: 401 Unauthorized", err, t)
 
 	// wrong path: bad result code from EC2 metadata service
@@ -418,7 +408,7 @@ func TestMetadataCredentialService(t *testing.T) {
 		tokenPath:       ts.server.URL + "/latest/api/token",
 		logger:          logging.Get(),
 	}
-	_, err = cs.credentials()
+	_, err = cs.credentials(context.Background())
 	assertErr("metadata service query did not succeed: Failure", err, t)
 
 	// happy path: base case
@@ -435,8 +425,8 @@ func TestMetadataCredentialService(t *testing.T) {
 		tokenPath:       ts.server.URL + "/latest/api/token",
 		logger:          logging.Get(),
 	}
-	var creds awsCredentials
-	creds, err = cs.credentials()
+	var creds aws.Credentials
+	creds, err = cs.credentials(context.Background())
 	if err != nil {
 		// Cannot proceed with test if unable to fetch credentials.
 		t.Fatal(err)
@@ -449,7 +439,7 @@ func TestMetadataCredentialService(t *testing.T) {
 
 	// happy path: verify credentials are cached based on expiry
 	ts.payload.AccessKeyID = "ICHANGEDTHISBUTWEWONTSEEIT"
-	creds, err = cs.credentials()
+	creds, err = cs.credentials(context.Background())
 	if err != nil {
 		// Cannot proceed with test if unable to fetch credentials.
 		t.Fatal(err)
@@ -476,7 +466,7 @@ func TestMetadataCredentialService(t *testing.T) {
 		Token:           "MYAWSSECURITYTOKENGOESHERE",
 		Expiration:      time.Now().UTC().Add(time.Minute * 2)} // short time
 
-	creds, err = cs.credentials()
+	creds, err = cs.credentials(context.Background())
 	if err != nil {
 		// Cannot proceed with test if unable to fetch credentials.
 		t.Fatal(err)
@@ -489,7 +479,7 @@ func TestMetadataCredentialService(t *testing.T) {
 
 	// second time through, with changes
 	ts.payload.AccessKeyID = "ICHANGEDTHISANDWEWILLSEEIT"
-	creds, err = cs.credentials()
+	creds, err = cs.credentials(context.Background())
 	if err != nil {
 		// Cannot proceed with test if unable to fetch credentials.
 		t.Fatal(err)
@@ -501,7 +491,7 @@ func TestMetadataCredentialService(t *testing.T) {
 	assertEq(creds.SessionToken, ts.payload.Token, t)
 }
 
-func TestV4Signing(t *testing.T) {
+func TestMetadataServiceErrorHandled(t *testing.T) {
 	ts := ec2CredTestServer{}
 	ts.start()
 	defer ts.stop()
@@ -514,13 +504,18 @@ func TestV4Signing(t *testing.T) {
 		tokenPath:       ts.server.URL + "/latest/api/token",
 		logger:          logging.Get(),
 	}
-	req, _ := http.NewRequest("GET", "https://mybucket.s3.amazonaws.com/bundle.tar.gz", strings.NewReader(""))
-	err := signV4(req, "s3", cs, time.Unix(1556129697, 0))
 
-	assertErr("error getting AWS credentials: metadata HTTP request returned unexpected status: 404 Not Found", err, t)
+	_, err := cs.credentials(context.Background())
+	assertErr("metadata HTTP request returned unexpected status: 404 Not Found", err, t)
+}
+
+func TestV4Signing(t *testing.T) {
+	ts := ec2CredTestServer{}
+	ts.start()
+	defer ts.stop()
 
 	// happy path: sign correctly
-	cs = &awsMetadataCredentialService{
+	cs := &awsMetadataCredentialService{
 		RoleName:        "my_iam_role", // not present
 		RegionName:      "us-east-1",
 		credServicePath: ts.server.URL + "/latest/meta-data/iam/security-credentials/",
@@ -533,23 +528,58 @@ func TestV4Signing(t *testing.T) {
 		Code:            "Success",
 		Token:           "MYAWSSECURITYTOKENGOESHERE",
 		Expiration:      time.Now().UTC().Add(time.Minute * 2)}
-	req, _ = http.NewRequest("GET", "https://mybucket.s3.amazonaws.com/bundle.tar.gz", strings.NewReader(""))
-	err = signV4(req, "s3", cs, time.Unix(1556129697, 0))
+	req, _ := http.NewRequest("GET", "https://mybucket.s3.amazonaws.com/bundle.tar.gz", strings.NewReader(""))
 
-	if err != nil {
-		t.Fatal("unexpected error during signing")
+	// force a non-random source so that we can predict the v4a signing key and, thus, signature
+	myReader := strings.NewReader("000000000000000000000000000000000")
+	aws.SetRandomSource(myReader)
+	defer func() { aws.SetRandomSource(rand.Reader) }()
+
+	tests := []struct {
+		sigVersion            string
+		expectedAuthorization []string
+	}{
+		{
+			sigVersion: "4",
+			expectedAuthorization: []string{
+				"AWS4-HMAC-SHA256 Credential=MYAWSACCESSKEYGOESHERE/20190424/us-east-1/s3/aws4_request," +
+					"SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token," +
+					"Signature=d3f0561abae5e35d9ee2c15e678bb7acacc4b4743707a8f7fbcbfdb519078990",
+			},
+		},
+		{
+			sigVersion: "4a",
+			expectedAuthorization: []string{
+				// this signature is for go 1.20+, which changed crypto/ecdsa so signatures differ from go 1.18
+				"AWS4-ECDSA-P256-SHA256 Credential=MYAWSACCESSKEYGOESHERE/20190424/s3/aws4_request, " +
+					"SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-region-set;x-amz-security-token, " +
+					"Signature=3045022031b9dd601cd02650193586a32721d0614bf2e34bbc76cff0d9812366d1dc8878022100d0cfbd91bd2dd98f1e2d7feb9091c48f8b66a20174922770ec9e3b74db8e1826",
+				// this signature is for go 1.18+. Remove this and only test for a single value when OPA drops go 1.19
+				"AWS4-ECDSA-P256-SHA256 Credential=MYAWSACCESSKEYGOESHERE/20190424/s3/aws4_request, " +
+					"SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-region-set;x-amz-security-token, " +
+					"Signature=304402207d1bcb6fb68d85be3e9f6948a8dc8596a531b3f5a82ca2350acabe98941312bc02207d81ed07c7356226d93611820548a806c8e1f0cc72ff41ba672d23901e5a06bf",
+			},
+		},
 	}
 
-	// expect mandatory headers
-	assertEq(req.Header.Get("Host"), "mybucket.s3.amazonaws.com", t)
-	assertEq(req.Header.Get("Authorization"),
-		"AWS4-HMAC-SHA256 Credential=MYAWSACCESSKEYGOESHERE/20190424/us-east-1/s3/aws4_request,"+
-			"SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token,"+
-			"Signature=d3f0561abae5e35d9ee2c15e678bb7acacc4b4743707a8f7fbcbfdb519078990", t)
-	assertEq(req.Header.Get("X-Amz-Content-Sha256"),
-		"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", t)
-	assertEq(req.Header.Get("X-Amz-Date"), "20190424T181457Z", t)
-	assertEq(req.Header.Get("X-Amz-Security-Token"), "MYAWSSECURITYTOKENGOESHERE", t)
+	for _, test := range tests {
+		creds, err := cs.credentials(context.Background())
+		if err != nil {
+			t.Fatal("unexpected error getting credentials")
+		}
+
+		if err := aws.SignRequest(req, "s3", creds, time.Unix(1556129697, 0), test.sigVersion); err != nil {
+			t.Fatal("unexpected error during signing", err)
+		}
+
+		// expect mandatory headers
+		assertEq("mybucket.s3.amazonaws.com", req.Header.Get("Host"), t)
+		assertIn(test.expectedAuthorization, req.Header.Get("Authorization"), t)
+		assertEq("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+			req.Header.Get("X-Amz-Content-Sha256"), t)
+		assertEq("20190424T181457Z", req.Header.Get("X-Amz-Date"), t)
+		assertEq("MYAWSSECURITYTOKENGOESHERE", req.Header.Get("X-Amz-Security-Token"), t)
+	}
 }
 
 func TestV4SigningForApiGateway(t *testing.T) {
@@ -574,9 +604,12 @@ func TestV4SigningForApiGateway(t *testing.T) {
 		strings.NewReader("{ \"payload\": 42 }"))
 	req.Header.Set("Content-Type", "application/json")
 
-	err := signV4(req, "execute-api", cs, time.Unix(1556129697, 0))
-
+	creds, err := cs.credentials(context.Background())
 	if err != nil {
+		t.Fatal("unexpected error getting credentials")
+	}
+
+	if err := aws.SignRequest(req, "execute-api", creds, time.Unix(1556129697, 0), "4"); err != nil {
 		t.Fatal("unexpected error during signing")
 	}
 
@@ -619,20 +652,54 @@ func TestV4SigningOmitsIgnoredHeaders(t *testing.T) {
 	req.Header.Set("Authorization", "Auth header will be overwritten, and shouldn't be signed")
 	req.Header.Set("X-Amzn-Trace-Id", "Some trace id")
 
-	err := signV4(req, "execute-api", cs, time.Unix(1556129697, 0))
+	// force a non-random source so that we can predict the v4a signing key and, thus, signature
+	myReader := strings.NewReader("000000000000000000000000000000000")
+	aws.SetRandomSource(myReader)
+	defer func() { aws.SetRandomSource(rand.Reader) }()
 
-	if err != nil {
-		t.Fatal("unexpected error during signing")
+	tests := []struct {
+		sigVersion            string
+		expectedAuthorization []string
+	}{
+		{
+			sigVersion: "4",
+			expectedAuthorization: []string{"AWS4-HMAC-SHA256 Credential=MYAWSACCESSKEYGOESHERE/20190424/us-east-1/execute-api/aws4_request," +
+				"SignedHeaders=content-type;host;x-amz-date;x-amz-security-token," +
+				"Signature=c8ee72cc45050b255bcbf19defc693f7cd788959b5380fa0985de6e865635339",
+			},
+		},
+		{
+			sigVersion: "4a",
+			expectedAuthorization: []string{
+				// this signature is for go 1.20+, which changed crypto/ecdsa so signatures differ from go 1.18
+				"AWS4-ECDSA-P256-SHA256 Credential=MYAWSACCESSKEYGOESHERE/20190424/execute-api/aws4_request, " +
+					"SignedHeaders=content-length;content-type;host;x-amz-content-sha256;x-amz-date;x-amz-region-set;x-amz-security-token, " +
+					"Signature=3045022100e62b33949d5d5666c1cc737db6673600d7893b977df48e4eb64a6e8747582a2f022011f56ad285472956a3e00c6971d03ebd8ecb579804d8fd91a6fb483a1f502118",
+				// this signature is for go 1.18+. Remove this and only test for a single value when OPA drops go 1.19
+				"AWS4-ECDSA-P256-SHA256 Credential=MYAWSACCESSKEYGOESHERE/20190424/execute-api/aws4_request, " +
+					"SignedHeaders=content-length;content-type;host;x-amz-content-sha256;x-amz-date;x-amz-region-set;x-amz-security-token, " +
+					"Signature=30450221009f3b0cda178456dfd1bec61b78bdbd115c0cf497eaa52c58bbb2850ad9c49c3002207009cb88a1219a4a6626056c31823a6b5bc2728bc88bc98a06e12e1148482c94",
+			},
+		},
 	}
 
-	// Check the signed headers doesn't include user-agent, authorization or x-amz-trace-id
-	assertEq(req.Header.Get("Authorization"),
-		"AWS4-HMAC-SHA256 Credential=MYAWSACCESSKEYGOESHERE/20190424/us-east-1/execute-api/aws4_request,"+
-			"SignedHeaders=content-type;host;x-amz-date;x-amz-security-token,"+
-			"Signature=c8ee72cc45050b255bcbf19defc693f7cd788959b5380fa0985de6e865635339", t)
-	// The headers omitted from signing should still be present in the request
-	assertEq(req.Header.Get("User-Agent"), "Unit Tests!", t)
-	assertEq(req.Header.Get("X-Amzn-Trace-Id"), "Some trace id", t)
+	for _, test := range tests {
+		creds, err := cs.credentials(context.Background())
+		if err != nil {
+			t.Fatal("unexpected error getting credentials")
+		}
+
+		if err := aws.SignRequest(req, "execute-api", creds, time.Unix(1556129697, 0), test.sigVersion); err != nil {
+			t.Fatal("unexpected error during signing")
+		}
+
+		// Check the signed headers doesn't include user-agent, authorization or x-amz-trace-id
+		assertIn(test.expectedAuthorization, req.Header.Get("Authorization"), t)
+		// The headers omitted from signing should still be present in the request
+		assertEq(req.Header.Get("User-Agent"), "Unit Tests!", t)
+		assertEq(req.Header.Get("X-Amzn-Trace-Id"), "Some trace id", t)
+	}
+
 }
 
 func TestV4SigningCustomPort(t *testing.T) {
@@ -654,9 +721,13 @@ func TestV4SigningCustomPort(t *testing.T) {
 		Token:           "MYAWSSECURITYTOKENGOESHERE",
 		Expiration:      time.Now().UTC().Add(time.Minute * 2)}
 	req, _ := http.NewRequest("GET", "https://custom.s3.server:9000/bundle.tar.gz", strings.NewReader(""))
-	err := signV4(req, "s3", cs, time.Unix(1556129697, 0))
 
+	creds, err := cs.credentials(context.Background())
 	if err != nil {
+		t.Fatal("unexpected error getting credentials")
+	}
+
+	if err := aws.SignRequest(req, "s3", creds, time.Unix(1556129697, 0), "4"); err != nil {
 		t.Fatal("unexpected error during signing")
 	}
 
@@ -690,18 +761,36 @@ func TestV4SigningDoesNotMutateBody(t *testing.T) {
 		Code:            "Success",
 		Token:           "MYAWSSECURITYTOKENGOESHERE",
 		Expiration:      time.Now().UTC().Add(time.Minute * 2)}
-	req, _ := http.NewRequest("POST", "https://myrestapi.execute-api.us-east-1.amazonaws.com/prod/logs",
-		strings.NewReader("{ \"payload\": 42 }"))
 
-	err := signV4(req, "execute-api", cs, time.Unix(1556129697, 0))
+	// force a non-random source so that we can predict the v4a signing key and, thus, signature
+	myReader := strings.NewReader("000000000000000000000000000000000")
+	aws.SetRandomSource(myReader)
+	defer func() { aws.SetRandomSource(rand.Reader) }()
 
-	if err != nil {
-		t.Fatal("unexpected error during signing")
+	tests := []struct {
+		sigVersion string
+	}{
+		{sigVersion: "4"},
+		{sigVersion: "4a"},
 	}
 
-	// Read the body and check that it was not mutated
-	body, _ := ioutil.ReadAll(req.Body)
-	assertEq(string(body), "{ \"payload\": 42 }", t)
+	for _, test := range tests {
+		req, _ := http.NewRequest("POST", "https://myrestapi.execute-api.us-east-1.amazonaws.com/prod/logs",
+			strings.NewReader("{ \"payload\": 42 }"))
+
+		creds, err := cs.credentials(context.Background())
+		if err != nil {
+			t.Fatal("unexpected error getting credentials")
+		}
+
+		if err := aws.SignRequest(req, "execute-api", creds, time.Unix(1556129697, 0), test.sigVersion); err != nil {
+			t.Fatal("unexpected error during signing")
+		}
+
+		// Read the body and check that it was not mutated
+		body, _ := io.ReadAll(req.Body)
+		assertEq(string(body), "{ \"payload\": 42 }", t)
+	}
 }
 
 func TestV4SigningWithMultiValueHeaders(t *testing.T) {
@@ -727,20 +816,57 @@ func TestV4SigningWithMultiValueHeaders(t *testing.T) {
 	req.Header.Add("Accept", "text/plain")
 	req.Header.Add("Accept", "text/html")
 
-	err := signV4(req, "execute-api", cs, time.Unix(1556129697, 0))
+	// force a non-random source so that we can predict the v4a signing key and, thus, signature
+	myReader := strings.NewReader("000000000000000000000000000000000")
+	aws.SetRandomSource(myReader)
+	defer func() { aws.SetRandomSource(rand.Reader) }()
 
-	if err != nil {
-		t.Fatal("unexpected error during signing")
+	tests := []struct {
+		sigVersion            string
+		expectedAuthorization []string
+	}{
+		{
+			sigVersion: "4",
+			expectedAuthorization: []string{
+				"AWS4-HMAC-SHA256 Credential=MYAWSACCESSKEYGOESHERE/20190424/us-east-1/execute-api/aws4_request," +
+					"SignedHeaders=accept;host;x-amz-date;x-amz-security-token," +
+					"Signature=0237b0c789cad36212f0efba70c02549e1f659ab9caaca16423930cc7236c046",
+			},
+		},
+		{
+			sigVersion: "4a",
+			expectedAuthorization: []string{
+				// this signature is for go 1.20+, which changed crypto/ecdsa so signatures differ from go 1.18
+				"AWS4-ECDSA-P256-SHA256 Credential=MYAWSACCESSKEYGOESHERE/20190424/execute-api/aws4_request, " +
+					"SignedHeaders=accept;content-length;host;x-amz-content-sha256;x-amz-date;x-amz-region-set;x-amz-security-token, " +
+					"Signature=3046022100f7fd07e2a00b1be3074be0c2e3871bd42ddc4c01549b1ffc4809ef3fafde80780221008c6bf906cdb9040ebeb94d1134598e7920fa8cb7bda91b00ce0ab9838b79631b",
+				// this signature is for go 1.18+. Remove this and only test for a single value when OPA drops go 1.19
+				"AWS4-ECDSA-P256-SHA256 Credential=MYAWSACCESSKEYGOESHERE/20190424/execute-api/aws4_request, " +
+					"SignedHeaders=accept;content-length;host;x-amz-content-sha256;x-amz-date;x-amz-region-set;x-amz-security-token, " +
+					"Signature=304402202d5f2d4d42fe59b2e61fa455cb35a335139d109c2d37aaa8946d45fd0fb4989c022068238cbfbc80326f5cc391f2b6837910191ceabb58ec0bf986c0141f76046594",
+			},
+		},
 	}
 
-	// Check the signed headers includes our multi-value 'accept' header
-	assertEq(req.Header.Get("Authorization"),
-		"AWS4-HMAC-SHA256 Credential=MYAWSACCESSKEYGOESHERE/20190424/us-east-1/execute-api/aws4_request,"+
-			"SignedHeaders=accept;host;x-amz-date;x-amz-security-token,"+
-			"Signature=0237b0c789cad36212f0efba70c02549e1f659ab9caaca16423930cc7236c046", t)
-	// The multi-value headers are preserved
-	assertEq(req.Header.Values("Accept")[0], "text/plain", t)
-	assertEq(req.Header.Values("Accept")[1], "text/html", t)
+	for _, test := range tests {
+		creds, err := cs.credentials(context.Background())
+		if err != nil {
+			t.Fatal("unexpected error getting credentials")
+		}
+
+		if err := aws.SignRequest(req, "execute-api", creds, time.Unix(1556129697, 0), test.sigVersion); err != nil {
+			t.Fatal("unexpected error during signing")
+		}
+
+		if len(req.Header.Values("Authorization")) != 1 {
+			t.Fatal("Authorization header is multi-valued. This will break AWS v4 signing.")
+		}
+		// Check the signed headers includes our multi-value 'accept' header
+		assertIn(test.expectedAuthorization, req.Header.Get("Authorization"), t)
+		// The multi-value headers are preserved
+		assertEq("text/plain", req.Header.Values("Accept")[0], t)
+		assertEq("text/html", req.Header.Values("Accept")[1], t)
+	}
 }
 
 // simulate EC2 metadata service
@@ -797,15 +923,7 @@ func (t *ec2CredTestServer) stop() {
 }
 
 func TestWebIdentityCredentialService(t *testing.T) {
-	reset := func() {
-		os.Unsetenv("AWS_WEB_IDENTITY_TOKEN_FILE")
-		os.Unsetenv("AWS_ROLE_ARN")
-		os.Unsetenv("AWS_REGION")
-	}
-	reset()
-	t.Cleanup(reset)
-
-	os.Setenv("AWS_REGION", "us-west-1")
+	t.Setenv("AWS_REGION", "us-west-1")
 
 	testAccessKey := "ASgeIAIOSFODNN7EXAMPLE"
 	ts := stsTestServer{
@@ -831,12 +949,12 @@ func TestWebIdentityCredentialService(t *testing.T) {
 		// wrong path: no AWS_ROLE_ARN set
 		err := cs.populateFromEnv()
 		assertErr("no AWS_ROLE_ARN set in environment", err, t)
-		os.Setenv("AWS_ROLE_ARN", "role:arn")
+		t.Setenv("AWS_ROLE_ARN", "role:arn")
 
 		// wrong path: no AWS_WEB_IDENTITY_TOKEN_FILE set
 		err = cs.populateFromEnv()
 		assertErr("no AWS_WEB_IDENTITY_TOKEN_FILE set in environment", err, t)
-		os.Setenv("AWS_WEB_IDENTITY_TOKEN_FILE", "/nonsense")
+		t.Setenv("AWS_WEB_IDENTITY_TOKEN_FILE", "/nonsense")
 
 		// happy path: both env vars set
 		err = cs.populateFromEnv()
@@ -845,52 +963,52 @@ func TestWebIdentityCredentialService(t *testing.T) {
 		}
 
 		// wrong path: refresh with invalid web token file
-		err = cs.refreshFromService()
+		err = cs.refreshFromService(context.Background())
 		assertErr("unable to read web token for sts HTTP request: open /nonsense: no such file or directory", err, t)
 
 		// wrong path: refresh with "bad token"
-		os.Setenv("AWS_WEB_IDENTITY_TOKEN_FILE", badTokenFile)
+		t.Setenv("AWS_WEB_IDENTITY_TOKEN_FILE", badTokenFile)
 		_ = cs.populateFromEnv()
-		err = cs.refreshFromService()
+		err = cs.refreshFromService(context.Background())
 		assertErr("STS HTTP request returned unexpected status: 401 Unauthorized", err, t)
 
 		// happy path: refresh with "good token"
-		os.Setenv("AWS_WEB_IDENTITY_TOKEN_FILE", goodTokenFile)
+		t.Setenv("AWS_WEB_IDENTITY_TOKEN_FILE", goodTokenFile)
 		_ = cs.populateFromEnv()
-		err = cs.refreshFromService()
+		err = cs.refreshFromService(context.Background())
 		if err != nil {
 			t.Fatalf("Unexpected err: %s", err)
 		}
 
 		// happy path: refresh and get credentials
-		creds, _ := cs.credentials()
+		creds, _ := cs.credentials(context.Background())
 		assertEq(creds.AccessKey, testAccessKey, t)
 
 		// happy path: refresh with session and get credentials
 		cs.expiration = time.Now()
 		cs.SessionName = "TEST_SESSION"
-		creds, _ = cs.credentials()
+		creds, _ = cs.credentials(context.Background())
 		assertEq(creds.AccessKey, testAccessKey, t)
 
 		// happy path: don't refresh, but get credentials
 		ts.accessKey = "OTHERKEY"
-		creds, _ = cs.credentials()
+		creds, _ = cs.credentials(context.Background())
 		assertEq(creds.AccessKey, testAccessKey, t)
 
 		// happy/wrong path: refresh with "bad token" but return previous credentials
-		os.Setenv("AWS_WEB_IDENTITY_TOKEN_FILE", badTokenFile)
+		t.Setenv("AWS_WEB_IDENTITY_TOKEN_FILE", badTokenFile)
 		_ = cs.populateFromEnv()
 		cs.expiration = time.Now()
-		creds, err = cs.credentials()
+		creds, err = cs.credentials(context.Background())
 		assertEq(creds.AccessKey, testAccessKey, t)
 		assertErr("STS HTTP request returned unexpected status: 401 Unauthorized", err, t)
 
 		// wrong path: refresh with "bad token" but return previous credentials
-		os.Setenv("AWS_WEB_IDENTITY_TOKEN_FILE", goodTokenFile)
-		os.Setenv("AWS_ROLE_ARN", "BrokenRole")
+		t.Setenv("AWS_WEB_IDENTITY_TOKEN_FILE", goodTokenFile)
+		t.Setenv("AWS_ROLE_ARN", "BrokenRole")
 		_ = cs.populateFromEnv()
 		cs.expiration = time.Now()
-		creds, err = cs.credentials()
+		creds, err = cs.credentials(context.Background())
 		assertErr("failed to parse credential response from STS service: EOF", err, t)
 	})
 }
@@ -971,4 +1089,81 @@ func (t *stsTestServer) start() {
 
 func (t *stsTestServer) stop() {
 	t.server.Close()
+}
+
+func TestECRAuthPluginFailsWithoutAWSAuthPlugins(t *testing.T) {
+	ap := newECRAuthPlugin(&awsSigningAuthPlugin{
+		logger: logging.NewNoOpLogger(),
+	})
+
+	req := httptest.NewRequest("", "http://somewhere.com", nil)
+
+	err := ap.Prepare(req)
+	if err == nil {
+		t.Error("ecrAuthPlugin.Prepare(): expected and error")
+	}
+}
+
+func TestECRAuthPluginRequestsAuthorizationToken(t *testing.T) {
+	// Environment credentials to sign the ecr get authorization token request
+	t.Setenv(accessKeyEnvVar, "blablabla")
+	t.Setenv(secretKeyEnvVar, "tatata")
+	t.Setenv(awsRegionEnvVar, "us-east-1")
+	t.Setenv(sessionTokenEnvVar, "lalala")
+
+	awsAuthPlugin := awsSigningAuthPlugin{
+		logger:                    logging.NewNoOpLogger(),
+		AWSEnvironmentCredentials: &awsEnvironmentCredentialService{},
+	}
+
+	ap := newECRAuthPlugin(&awsAuthPlugin)
+	ap.ecr = &ecrStub{token: aws.ECRAuthorizationToken{
+		AuthorizationToken: "secret",
+	}}
+
+	req := httptest.NewRequest("", "http://somewhere.com", nil)
+
+	if err := ap.Prepare(req); err != nil {
+		t.Errorf("ecrAuthPlugin.Prepare() = %q", err)
+	}
+
+	got := req.Header.Get("Authorization")
+	want := "Basic secret"
+	if got != want {
+		t.Errorf("req.Header.Get(\"Authorization\") = %q, want %q", got, want)
+	}
+}
+
+type ecrStub struct {
+	token aws.ECRAuthorizationToken
+}
+
+func (es *ecrStub) GetAuthorizationToken(context.Context, aws.Credentials, string) (aws.ECRAuthorizationToken, error) {
+	return es.token, nil
+}
+
+func TestECRAuthPluginReusesCachedToken(t *testing.T) {
+	logger := logging.NewNoOpLogger()
+	ap := ecrAuthPlugin{
+		token: aws.ECRAuthorizationToken{
+			AuthorizationToken: "secret",
+			ExpiresAt:          time.Now().Add(time.Hour),
+		},
+		awsAuthPlugin: &awsSigningAuthPlugin{
+			logger: logger,
+		},
+		logger: logger,
+	}
+
+	req := httptest.NewRequest("", "http://somewhere.com", nil)
+
+	if err := ap.Prepare(req); err != nil {
+		t.Errorf("ecrAuthPlugin.Prepare() = %q", err)
+	}
+
+	got := req.Header.Get("Authorization")
+	want := "Basic secret"
+	if got != want {
+		t.Errorf("req.Header.Get(\"Authorization\") = %q, want %q", got, want)
+	}
 }

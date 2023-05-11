@@ -2,6 +2,7 @@
 // Use of this source code is governed by an Apache2
 // license that can be found in the LICENSE file.
 
+//go:build opa_wasm
 // +build opa_wasm
 
 package rego
@@ -12,6 +13,8 @@ import (
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,6 +25,7 @@ import (
 	"github.com/open-policy-agent/opa/storage/inmem"
 	"github.com/open-policy-agent/opa/topdown"
 	"github.com/open-policy-agent/opa/topdown/cache"
+	"github.com/open-policy-agent/opa/util/test"
 
 	_ "github.com/open-policy-agent/opa/features/wasm"
 )
@@ -127,6 +131,8 @@ func TestWasmTimeOfDay(t *testing.T) {
 }
 
 func TestEvalWithContextTimeout(t *testing.T) {
+	test.Skip(t)
+
 	ts := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
@@ -336,5 +342,55 @@ func TestEvalWasmWithInterQueryCache(t *testing.T) {
 
 	if len(requests) != 1 {
 		t.Fatal("Expected server to be called only once")
+	}
+}
+
+func TestEvalWasmWithHTTPAllowNet(t *testing.T) {
+	var requests []*http.Request
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r)
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"x": 1}`))
+	}))
+	defer ts.Close()
+
+	serverUrl, err := url.Parse(ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverHost := strings.Split(serverUrl.Host, ":")[0]
+
+	query := fmt.Sprintf(`http.send({"method": "get", "url": "%s", "force_json_decode": true, "cache": true})`, ts.URL)
+	capabilities := ast.CapabilitiesForThisVersion()
+	capabilities.AllowNet = []string{"example.com"}
+
+	// add an inter-query cache
+	config, _ := cache.ParseCachingConfig(nil)
+	interQueryCache := cache.NewInterQueryCache(config)
+
+	ctx := context.Background()
+	// StrictBuiltinErrors(true) has no effect when target is 'wasm'
+	// this request should be rejected by the allow_net allowlist
+	_, err = New(Target("wasm"), Query(query), InterQueryBuiltinCache(interQueryCache), Capabilities(capabilities)).Eval(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(requests) != 0 {
+		t.Fatal("Expected server to not be called")
+	}
+
+	capabilities.AllowNet = []string{serverHost}
+
+	// eval again with same query
+	// this request should not be rejected by the allow_net allowlist
+	_, err = New(Target("wasm"), Query(query), InterQueryBuiltinCache(interQueryCache), Capabilities(capabilities)).Eval(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(requests) != 1 {
+		t.Fatal("Expected server to never be called")
 	}
 }

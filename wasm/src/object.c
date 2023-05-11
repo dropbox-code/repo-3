@@ -435,13 +435,70 @@ opa_value *builtin_object_get(opa_value *obj, opa_value *key, opa_value *value)
         return NULL;
     }
 
-    opa_object_elem_t *elem = opa_object_get(opa_cast_object(obj), key);
-    if (elem != NULL)
+    opa_value *elem;
+
+    // if the key is not an array, then we get that top level key from the object/array or return the default value
+    if (opa_value_type(key) != OPA_ARRAY) {
+        elem = opa_value_get(obj, key);
+        if (elem != NULL)
+        {
+            return elem;
+        }
+
+        return value;
+    }
+
+    size_t path_len = opa_cast_array(key)->len;
+    // if the path is empty, then we skip selecting nested keys and return the default
+    if (path_len == 0) {
+        return obj;
+    }
+
+    for (int i = 0; i < path_len; i++)
     {
-       return elem->v;
+        opa_value *path_component = opa_cast_array(key)->elems[i].v;
+
+        elem = opa_value_get(obj, path_component);
+
+        if (elem == NULL)
+        {
+            return value;
+        }
+
+        if (i == path_len-1)
+        {
+            return elem;
+        }
+
+        obj = elem;
     }
 
     return value;
+}
+
+OPA_BUILTIN
+opa_value *builtin_object_keys(opa_value *a)
+{
+    if (opa_value_type(a) != OPA_OBJECT)
+    {
+        return NULL;
+    }
+
+    opa_object_t *obj = opa_cast_object(a);
+    opa_set_t *keys = opa_cast_set(opa_set_with_cap(obj->len));
+
+    for (int i = 0; i < obj->n; i++)
+    {
+        opa_object_elem_t *elem = obj->buckets[i];
+
+        while (elem != NULL)
+        {
+            opa_set_add(keys, elem->k);
+            elem = elem->next;
+        }
+    }
+
+    return &keys->hdr;
 }
 
 OPA_BUILTIN
@@ -505,6 +562,34 @@ opa_value *builtin_object_union(opa_value *a, opa_value *b)
     }
 
     opa_value *r = __merge(a, b);
+
+    return r;
+}
+
+OPA_BUILTIN
+opa_value *builtin_object_union_n(opa_value *a)
+{
+    opa_value *r = NULL;
+
+    for (opa_value *key = opa_value_iter(a, NULL); key != NULL;
+         key = opa_value_iter(a, key)){
+        opa_value *next_obj = opa_value_get(a, key);
+        if (opa_value_type(next_obj) != OPA_OBJECT) {
+            return NULL;
+        }
+
+        if (r == NULL) {
+            r = next_obj;
+        } else {
+            opa_value *merged = builtin_object_union(r, next_obj);
+
+            if (merged == NULL) {
+                return NULL;
+            }
+
+            r = merged;
+        }
+    }
 
     return r;
 }

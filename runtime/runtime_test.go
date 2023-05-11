@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,6 +20,7 @@ import (
 
 	"github.com/open-policy-agent/opa/internal/report"
 	"github.com/open-policy-agent/opa/logging"
+	testLog "github.com/open-policy-agent/opa/logging/test"
 	"github.com/open-policy-agent/opa/server"
 
 	"github.com/open-policy-agent/opa/ast"
@@ -104,7 +104,7 @@ func testRuntimeProcessWatchEvents(t *testing.T, asBundle bool) {
 			"hello": "world-2",
 		}
 
-		if err := ioutil.WriteFile(path.Join(rootDir, "some/data.json"), util.MustMarshalJSON(expected), 0644); err != nil {
+		if err := os.WriteFile(path.Join(rootDir, "some/data.json"), util.MustMarshalJSON(expected), 0644); err != nil {
 			panic(err)
 		}
 
@@ -194,7 +194,7 @@ func testRuntimeProcessWatchEventPolicyError(t *testing.T, asBundle bool) {
 
 		default x = 2`)
 
-		if err := ioutil.WriteFile(path.Join(rootDir, "y.rego"), newModule, 0644); err != nil {
+		if err := os.WriteFile(path.Join(rootDir, "y.rego"), newModule, 0644); err != nil {
 			t.Fatal(err)
 		}
 
@@ -369,6 +369,51 @@ func TestServerInitialized(t *testing.T) {
 		t.Fatal("expected ServerInitializedChannel to be closed")
 	}
 }
+func TestUrlPathToConfigOverride(t *testing.T) {
+	params := NewParams()
+	params.Paths = []string{"https://www.example.com/bundles/bundle.tar.gz"}
+	ctx := context.Background()
+	rt, err := NewRuntime(ctx, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var serviceConf map[string]interface{}
+	if err = json.Unmarshal(rt.Manager.Config.Services, &serviceConf); err != nil {
+		t.Fatal(err)
+	}
+
+	cliService, ok := serviceConf["cli1"].(map[string]interface{})
+	if !ok {
+		t.Fatal("excpected service configuration for 'cli1' service")
+	}
+
+	if cliService["url"] != "https://www.example.com" {
+		t.Error("expected cli1 service url value: 'https://www.example.com'")
+	}
+
+	var bundleConf map[string]interface{}
+	if err = json.Unmarshal(rt.Manager.Config.Bundles, &bundleConf); err != nil {
+		t.Fatal(err)
+	}
+
+	cliBundle, ok := bundleConf["cli1"].(map[string]interface{})
+	if !ok {
+		t.Fatal("excpected bundle configuration for 'cli1' bundle")
+	}
+
+	if cliBundle["service"] != "cli1" {
+		t.Error("expected cli1 bundle service value: 'cli1'")
+	}
+
+	if cliBundle["resource"] != "/bundles/bundle.tar.gz" {
+		t.Error("expected cli1 bundle resource value: 'bundles/bundle.tar.gz'")
+	}
+
+	if cliBundle["persist"] != true {
+		t.Error("expected cli1 bundle persist value: true")
+	}
+}
 
 func getTestServer(update interface{}, statusCode int) (baseURL string, teardownFn func()) {
 	mux := http.NewServeMux()
@@ -385,7 +430,7 @@ func getTestServer(update interface{}, statusCode int) (baseURL string, teardown
 
 func testCheckOPAUpdate(t *testing.T, url string, expected *report.DataResponse) {
 	t.Helper()
-	os.Setenv("OPA_TELEMETRY_SERVICE_URL", url)
+	t.Setenv("OPA_TELEMETRY_SERVICE_URL", url)
 
 	ctx := context.Background()
 	rt := getTestRuntime(ctx, t, logging.NewNoOpLogger())
@@ -398,7 +443,7 @@ func testCheckOPAUpdate(t *testing.T, url string, expected *report.DataResponse)
 
 func testCheckOPAUpdateLoop(t *testing.T, url, expected string) {
 	t.Helper()
-	os.Setenv("OPA_TELEMETRY_SERVICE_URL", url)
+	t.Setenv("OPA_TELEMETRY_SERVICE_URL", url)
 
 	ctx := context.Background()
 
@@ -433,4 +478,54 @@ func getTestRuntime(ctx context.Context, t *testing.T, logger logging.Logger) *R
 		t.Fatalf("Unexpected error %v", err)
 	}
 	return rt
+}
+
+func TestAddrWarningMessage(t *testing.T) {
+	testCases := []struct {
+		name          string
+		addrSetByUser bool
+		containsMsg   bool
+	}{
+		{"WarningMessage", false, true},
+		{"NoWarningMessage", true, false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Millisecond)
+			defer cancel()
+
+			params := NewParams()
+
+			logger := testLog.New()
+			logLevel := logging.Info
+
+			params.Logger = logger
+			params.Addrs = &[]string{":8181"}
+			params.AddrSetByUser = tc.addrSetByUser
+			params.GracefulShutdownPeriod = 1
+			rt, err := NewRuntime(ctx, params)
+			if err != nil {
+				t.Fatalf("Unexpected error %v", err)
+			}
+
+			done := make(chan struct{})
+			go func() {
+				rt.StartServer(ctx)
+				close(done)
+			}()
+			<-done
+
+			warning := " OPA is running on a public (0.0.0.0) network interface. Unless you intend to expose OPA outside of the host, binding to the localhost interface (--addr localhost:8181) is recommended. See https://www.openpolicyagent.org/docs/latest/security/#interface-binding"
+			containsWarning := strings.Contains(logger.Entries()[0].Message, warning)
+
+			if containsWarning != tc.containsMsg {
+				t.Fatal("Mismatch between OPA server displaying the interface warning message and user setting the server address")
+			}
+
+			if logger.GetLevel() != logLevel {
+				t.Fatalf("Expected log level to be: \"%v\" but got \"%v\"", logLevel, logger.GetLevel())
+			}
+		})
+	}
 }

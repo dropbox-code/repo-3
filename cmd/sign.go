@@ -10,12 +10,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 
 	"github.com/open-policy-agent/opa/bundle"
@@ -37,6 +35,8 @@ const (
 	defaultHashingAlg      = "SHA-256"
 	signaturesFile         = ".signatures.json"
 )
+
+var errSigningConfigIncomplete = fmt.Errorf("specify the secret (HMAC) or path of the PEM file containing the private key (RSA and ECDSA)")
 
 func newSignCmdParams() signCmdParams {
 	return signCmdParams{}
@@ -128,7 +128,7 @@ To include additional claims in the payload use the --claims-file flag to provid
 a JSON file containing optional claims.
 
 For more information on the format of the ".signatures.json" file see
-https://www.openpolicyagent.org/docs/latest/management/#signature-format.
+https://www.openpolicyagent.org/docs/latest/management-bundles/#signature-format.
 `,
 		PreRunE: func(Cmd *cobra.Command, args []string) error {
 			return validateSignParams(args, cmdParams)
@@ -171,7 +171,10 @@ func doSign(args []string, params signCmdParams) error {
 		return err
 	}
 
-	signingConfig := buildSigningConfig(params.key, params.algorithm, params.claimsFile, params.plugin)
+	signingConfig, err := buildSigningConfig(params.key, params.algorithm, params.claimsFile, params.plugin)
+	if err != nil {
+		return err
+	}
 
 	token, err := bundle.GenerateSignedToken(files, signingConfig, "")
 	if err != nil {
@@ -192,7 +195,7 @@ func readBundleFiles(loaders []initload.BundleLoader, h bundle.SignatureHasher) 
 			}
 
 			if err != nil {
-				return files, errors.Wrap(err, "bundle read failed")
+				return files, fmt.Errorf("bundle read failed: %w", err)
 			}
 
 			// skip existing signatures file
@@ -261,7 +264,7 @@ func writeTokenToFile(token, fileLoc string) error {
 	if fileLoc != "" {
 		path = filepath.Join(fileLoc, path)
 	}
-	return ioutil.WriteFile(path, bs, 0644)
+	return os.WriteFile(path, bs, 0644)
 }
 
 func validateSignParams(args []string, params signCmdParams) error {
@@ -270,7 +273,7 @@ func validateSignParams(args []string, params signCmdParams) error {
 	}
 
 	if params.key == "" {
-		return fmt.Errorf("specify the secret (HMAC) or path of the PEM file containing the private key (RSA and ECDSA)")
+		return errSigningConfigIncomplete
 	}
 
 	if !params.bundleMode {

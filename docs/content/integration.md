@@ -31,7 +31,9 @@ OPA supports different ways to evaluate policies.
 * The [Go API (GoDoc)](https://pkg.go.dev/github.com/open-policy-agent/opa/rego) returns
   decisions as simple Go types (`bool`, `string`, `map[string]interface{}`,
   etc.)
-* [WebAssembly](../wasm) compiles Rego policies into WASM instructions so they can be embedded and evaluated by any WebAssembly runtime
+* [WebAssembly](../wasm) compiles Rego policies into Wasm instructions so they can be embedded and evaluated by any WebAssembly runtime
+* Custom compilers and evaluators may be written to parse evaluation plans in the low-level
+  [Intermediate Representation](../ir) format, which can be emitted by the `opa build` command
 * The [SDK](https://pkg.go.dev/github.com/open-policy-agent/opa/sdk) provides high-level APIs for obtaining the output
   of query evaluation as simple Go types (`bool`, `string`, `map[string]interface{}`, etc.)
 
@@ -66,20 +68,19 @@ decisions: `example/authz/allow` and `example/authz/is_admin`.
 ```live:authz:module:openable,read_only
 package example.authz
 
-default allow = false
+import future.keywords.if
+import future.keywords.in
 
-allow {
+default allow := false
+
+allow if {
     input.method == "GET"
     input.path == ["salary", input.subject.user]
 }
 
-allow {
-    is_admin
-}
+allow if is_admin
 
-is_admin {
-    input.subject.groups[_] == "admin"
-}
+is_admin if "admin" in input.subject.groups
 ```
 
 You can request specific decisions by querying for `<package path>/<rule name>`.
@@ -166,12 +167,109 @@ Content-Type: application/json
 For another example of how to integrate with OPA via HTTP see the [HTTP
 API Authorization](../http-api-authorization) tutorial.
 
+### Integrating with the Go SDK
+
+The [SDK](https://pkg.go.dev/github.com/open-policy-agent/opa/sdk) package contains high-level APIs for embedding OPA
+inside of Go programs and obtaining the output of query evaluation. To get started, import the `sdk` package:
+
+```go
+import "github.com/open-policy-agent/opa/sdk"
+```
+
+A typical workflow when using the `sdk` package would involve first creating a new `sdk.OPA` object by calling
+`sdk.New` and then invoking its `Decision` method to fetch the policy decision. The `sdk.New` call takes the
+`sdk.Options` object as an input which allows specifying the OPA configuration, console logger, plugins, etc.
+
+Here is an example that shows this process:
+
+```go
+package main
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+
+	"github.com/open-policy-agent/opa/sdk"
+	sdktest "github.com/open-policy-agent/opa/sdk/test"
+)
+
+func main() {
+	ctx := context.Background()
+
+	// create a mock HTTP bundle server
+	server, err := sdktest.NewServer(sdktest.MockBundle("/bundles/bundle.tar.gz", map[string]string{
+		"example.rego": `
+				package authz
+
+				import future.keywords.if
+
+				default allow := false
+
+				allow if input.open == "sesame"
+			`,
+	}))
+	if err != nil {
+		// handle error.
+	}
+
+	defer server.Stop()
+
+	// provide the OPA configuration which specifies
+	// fetching policy bundles from the mock server
+	// and logging decisions locally to the console
+	config := []byte(fmt.Sprintf(`{
+		"services": {
+			"test": {
+				"url": %q
+			}
+		},
+		"bundles": {
+			"test": {
+				"resource": "/bundles/bundle.tar.gz"
+			}
+		},
+		"decision_logs": {
+			"console": true
+		}
+	}`, server.URL()))
+
+	// create an instance of the OPA object
+	opa, err := sdk.New(ctx, sdk.Options{
+		ID:     "opa-test-1",
+		Config: bytes.NewReader(config),
+	})
+	if err != nil {
+		// handle error.
+	}
+
+	defer opa.Stop(ctx)
+
+	// get the named policy decision for the specified input
+	if result, err := opa.Decision(ctx, sdk.DecisionOptions{Path: "/authz/allow", Input: map[string]interface{}{"open": "sesame"}}); err != nil {
+		// handle error.
+	} else if decision, ok := result.Result.(bool); !ok || !decision {
+		// handle error.
+	}
+}
+```
+
+If you executed this code, the output (i.e. [Decision Log](https://www.openpolicyagent.org/docs/latest/management-decision-logs/) event)
+would be logged to the console by default.
+
+Setting an `ID` in `sdk.Options` is optional, but recommended. If you do not set an `ID`, a random one will be created
+for the system. While this is fine for testing, it makes it difficult to monitor the system over time, as a new ID will
+be created each time the SDK is initialized, such as when the process is restarted.
+
 ### Integrating with the Go API
 
-Use the
+Use the low-level
 [github.com/open-policy-agent/opa/rego](https://pkg.go.dev/github.com/open-policy-agent/opa/rego)
-package to embed OPA as a library inside services written in Go. To get started
-import the `rego` package:
+package to embed OPA as a library inside services written in Go, when only policy **evaluation** — and
+no other capabilities of OPA, like the management features — are desired. If you're unsure which one to
+use, the SDK is probably the better option.
+
+To get started import the `rego` package:
 
 ```go
 import "github.com/open-policy-agent/opa/rego"
@@ -199,22 +297,22 @@ store, etc.
 module := `
 package example.authz
 
-default allow = false
+import future.keywords.if
+import future.keywords.in
 
-allow {
-    some id
+default allow := false
+
+allow if {
     input.method == "GET"
     input.path == ["salary", input.subject.user]
 }
 
-allow {
-    is_admin
-}
+allow if is_admin
 
-is_admin {
-    input.subject.groups[_] = "admin"
-}
+is_admin if "admin" in input.subject.groups
 `
+
+ctx := context.TODO()
 
 query, err := rego.New(
     rego.Query("x = data.example.authz.allow"),
@@ -239,7 +337,6 @@ input := map[string]interface{}{
     },
 }
 
-ctx := context.TODO()
 results, err := query.Eval(ctx, rego.EvalInput(input))
 ```
 
@@ -287,96 +384,12 @@ Policies can be evaluated as compiled Wasm binaries.
 
 See [OPA Wasm docs](../wasm) for more details.
 
+### Intermediate Representation (IR)
 
-### SDK
+Policies may be compiled into evaluation plans using an intermediate representation format, suitable for custom
+compilers and evaluators.
 
-The [SDK](https://pkg.go.dev/github.com/open-policy-agent/opa/sdk) package contains high-level APIs for embedding OPA
-inside of Go programs and obtaining the output of query evaluation. To get started
-import the `sdk` package:
-
-```go
-import "github.com/open-policy-agent/opa/sdk"
-```
-
-A typical workflow when using the `sdk` package would involve first creating a new `sdk.OPA` object by calling
-`sdk.New` and then invoking its `Decision` method to fetch the policy decision. The `sdk.New` call takes the
-`sdk.Options` object as an input which allows specifying the OPA configuration, console logger, plugins, etc.
-
-Here is an example that shows this process:
-
-```go
-package main
-
-import (
-	"bytes"
-	"context"
-	"fmt"
-
-	"github.com/open-policy-agent/opa/sdk"
-	sdktest "github.com/open-policy-agent/opa/sdk/test"
-)
-
-func main() {
-	ctx := context.Background()
-
-	// create a mock HTTP bundle server
-	server, err := sdktest.NewServer(sdktest.MockBundle("/bundles/bundle.tar.gz", map[string]string{
-		"example.rego": `
-				package authz
-
-				default allow = false
-
-				allow {
-					input.open == "sesame"
-				}
-			`,
-	}))
-	if err != nil {
-		// handle error.
-	}
-
-	defer server.Stop()
-
-	// provide the OPA configuration which specifies
-	// fetching policy bundles from the mock server
-	// and logging decisions locally to the console
-	config := []byte(fmt.Sprintf(`{
-		"services": {
-			"test": {
-				"url": %q
-			}
-		},
-		"bundles": {
-			"test": {
-				"resource": "/bundles/bundle.tar.gz"
-			}
-		},
-		"decision_logs": {
-			"console": true
-		}
-	}`, server.URL()))
-
-	// create an instance of the OPA object
-	opa, err := sdk.New(ctx, sdk.Options{
-		Config: bytes.NewReader(config),
-	})
-	if err != nil {
-		// handle error.
-	}
-
-	defer opa.Stop(ctx)
-
-	// get the named policy decision for the specified input
-	if result, err := opa.Decision(ctx, sdk.DecisionOptions{Path: "/authz/allow", Input: map[string]interface{}{"open": "sesame"}}); err != nil {
-		// handle error.
-	} else if decision, ok := result.Result.(bool); !ok || !decision {
-		// handle error.
-	}
-}
-```
-
-If you executed this code, the output (i.e. [Decision Log](https://www.openpolicyagent.org/docs/latest/management-decision-logs/) event)
-would be logged to the console by default.
+See [OPA IR docs](../ir) for more details.
 
 ## Comparison
 
@@ -394,6 +407,4 @@ Integrating OPA via the REST API is the most common, at the time of writing.  OP
 
 Integrating OPA via the Go API only works for Go software.  Updates to OPA require re-vendoring and re-deploying the software.  Evaluation has less overhead than the REST API because all the communication happens in the same operating-system process.  All of the management functionality (bundles, decision logs, etc.) must be either enabled or implemented.  Security concerns are limited to those management features that are enabled or implemented.
 
-Integrating via WASM is still a work-in-progress.  But once it is finished, WASM policies will be embeddable in any programming language that has a WASM runtime.  Evaluation will have less overhead than the REST API (because it is evaluated in the same operating-system process) and should outperform the Go API (because the policies have been compiled to a lower-level instruction set).  Each programming language will need its own SDKs (also a WIP) that implement the management functionality and the evaluation interface. Typically new OPA language features will not require updating the service since neither the WASM runtime nor the SDKs will be impacted.  Updating the SDKs will require re-deploying the service.  Security will be analogous to the Go API integration: it is mainly the management functionality that presents security risks.
-
-
+Wasm policies are embeddable in any programming language that has a Wasm runtime. Evaluation has less overhead than the REST API (because it is evaluated in the same operating-system process) and should outperform the Go API (because the policies have been compiled to a lower-level instruction set). Each programming language will need its own SDKs that implement the management functionality and the evaluation interface. Typically new OPA language features will not require updating the service since neither the Wasm runtime nor the SDKs will be impacted. Updating the SDKs will require re-deploying the service. Security is analogous to the Go API integration: it is mainly the management functionality that presents security risks.
