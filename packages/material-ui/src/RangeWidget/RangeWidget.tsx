@@ -10,7 +10,23 @@ const { rangeSpec } = utils;
 const useStyles = makeStyles({
   slider: {
     marginTop: '45px',
+    '& .MuiSlider-markLabel': {
+      wordWrap: 'break-word',
+      whiteSpace: 'normal',
+      transform: 'translateX(-55%)',
+      textAlign: 'right',
+      maxWidth: '15%',
+    },
+    '& .MuiSlider-markLabelActive[data-index="0"]': {
+      maxWidth: '15%',
+      maxHeight: '80px',
+      transform: 'translateX(-44%)',
+      textAlign: 'left',
+    },
   },
+  sliderRoot: {
+    marginBottom: '45px',
+  }
 });
 
 
@@ -124,8 +140,9 @@ const RangeWidget = ({
       ? generateMarks(sliderProps.min, sliderProps.max, sliderProps.step)
       : generateEndpointMarks(sliderProps.min, sliderProps.max);
   return (
-    <div className={classes.slider}>
+    <div className={classes.sliderRoot}>
       <Slider
+        className={classes.slider}
         aria-label={utils.generateAriaLabel(label, options, required)}
         disabled={disabled || readonly}
         onChange={_onChange}
