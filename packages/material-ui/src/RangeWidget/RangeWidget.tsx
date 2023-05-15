@@ -13,15 +13,16 @@ const useStyles = makeStyles({
     '& .MuiSlider-markLabel': {
       wordWrap: 'break-word',
       whiteSpace: 'normal',
-      transform: 'translateX(-55%)',
-      textAlign: 'right',
-      maxWidth: '15%',
-    },
-    '& .MuiSlider-markLabelActive[data-index="0"]': {
-      maxWidth: '15%',
-      maxHeight: '80px',
-      transform: 'translateX(-44%)',
-      textAlign: 'left',
+      textAlign: 'center',
+      width: '15%',
+      '&[style="left: 0%;"]': {
+        textAlign: 'left',
+        transform: 'translateX(0%)'
+      },
+      '&[style="left: 100%;"]': {
+        textAlign: 'right',
+        transform: 'translateX(-100%)'
+      },
     },
   },
   sliderRoot: {
