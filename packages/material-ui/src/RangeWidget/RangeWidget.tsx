@@ -1,11 +1,35 @@
 import React from "react";
 
 import Slider from "@material-ui/core/Slider";
+import { makeStyles } from '@material-ui/core/styles';
 
 import { utils } from "@visma/rjsf-core";
 import { WidgetProps } from "@visma/rjsf-core";
 
 const { rangeSpec } = utils;
+const useStyles = makeStyles({
+  slider: {
+    marginTop: '45px',
+    '& .MuiSlider-markLabel': {
+      wordWrap: 'break-word',
+      whiteSpace: 'normal',
+      textAlign: 'center',
+      width: '15%',
+      '&[style="left: 0%;"]': {
+        textAlign: 'left',
+        transform: 'translateX(0%)'
+      },
+      '&[style="left: 100%;"]': {
+        textAlign: 'right',
+        transform: 'translateX(-100%)'
+      },
+    },
+  },
+  sliderRoot: {
+    marginBottom: '45px',
+  }
+});
+
 
 const getScaleProps = (options: {element: {widget?: string, scaleMarks?: [{value: number, label: string}]}}) => {
   const scaleMarks =
@@ -14,7 +38,6 @@ const getScaleProps = (options: {element: {widget?: string, scaleMarks?: [{value
       : options.element.scaleMarks;
   return { widget: options.element.widget, scaleMarks: scaleMarks};
 }
-
 const calculateMultiplier = (min: number, max: number, step: number) => {
   let multiplier = 1;
   const range = max-min;
@@ -111,25 +134,26 @@ const RangeWidget = ({
     target: { value },
   }: React.FocusEvent<HTMLInputElement>) => onFocus(id, value);
 
+  const classes = useStyles();
   const marks = scaleProps.widget === 'customScale'
     ? scaleProps.scaleMarks
     : scaleProps.widget === 'automaticScale'
       ? generateMarks(sliderProps.min, sliderProps.max, sliderProps.step)
       : generateEndpointMarks(sliderProps.min, sliderProps.max);
-
   return (
-    <>
+    <div className={classes.sliderRoot}>
       <Slider
+        className={classes.slider}
         aria-label={utils.generateAriaLabel(label, options, required)}
         disabled={disabled || readonly}
         onChange={_onChange}
         onBlur={_onBlur}
         onFocus={_onFocus}
-        valueLabelDisplay="auto"
+        valueLabelDisplay="on"
         marks={marks}
         {...sliderProps}
       />
-    </>
+    </div>
   );
 };
 
