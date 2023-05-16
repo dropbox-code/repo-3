@@ -100,6 +100,7 @@ const CheckboxesWidget = ({
                 <FormControlLabel
                   control={checkbox}
                   key={index}
+                  style={{marginTop: '6px'}}
                   label={option.label}
                 />
               );
