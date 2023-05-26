@@ -129,6 +129,7 @@ const SelectWidget = ({
           onFocus={_onFocus}
           InputProps={{
             id: `${id}-input`,
+            "aria-describedby": utils.ariaDescribedBy(id, options),
             classes: {formControl: classes.inputFormControl }
           }}
           InputLabelProps={{
@@ -139,7 +140,6 @@ const SelectWidget = ({
           SelectProps={{
             labelId: `${id}-label`,
             multiple: typeof multiple === "undefined" ? false : multiple,
-            "aria-describedby": utils.ariaDescribedBy(id, options),
           }}>
           {(enumOptions as any).map(({ value, label }: any, i: number) => {
             const disabled: any =
