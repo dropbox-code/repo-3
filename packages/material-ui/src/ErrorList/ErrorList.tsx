@@ -12,11 +12,10 @@ import Paper from '@material-ui/core/Paper';
 
 import { ErrorListProps } from '@visma/rjsf-core';
 
-const ErrorList = ({ errors, schema }: ErrorListProps) => {
+const ErrorList = ({ errors, uiSchema }: ErrorListProps) => {
   const intl = useIntl();
-  const required = schema.required || [];
-
-  //Sorted array of errors according to schema.required list for correct error message order
+  const uiOrder = uiSchema['ui:order'] || [];
+  //Sorted array of errors according to uiOrder for correct error message order
   const newErrors = errors.map(error => {
     const newError = { ...error };
 
@@ -34,10 +33,10 @@ const ErrorList = ({ errors, schema }: ErrorListProps) => {
 
     return newError;
 
-    // Sort list of newErrors according to schema.required list
+    // Sort list of newErrors according to uiOrder
   }).sort((a, b) => {
-    const indexA = required.indexOf(a.property);
-    const indexB = required.indexOf(b.property);
+    const indexA = uiOrder.indexOf(a.property);
+    const indexB = uiOrder.indexOf(b.property);
     return indexA - indexB;
   });
 
