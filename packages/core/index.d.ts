@@ -448,7 +448,7 @@ declare module '@visma/rjsf-core' {
 
         export function errorsId(id: string): string;
 
-        export function ariaDescribedBy(id: string, uiSchema: UiSchema): string;
+        export function ariaDescribedBy(id: string, uiSchema: UiSchema, rawErrors?: string[]): string;
 
         export function getGlobalMessage(messageName: string): string;
 
