@@ -12,8 +12,33 @@ import Paper from '@material-ui/core/Paper';
 
 import { ErrorListProps } from '@visma/rjsf-core';
 
-const ErrorList = ({ errors }: ErrorListProps) => {
+const ErrorList = ({ errors, uiSchema }: ErrorListProps) => {
   const intl = useIntl();
+  const uiOrder = uiSchema['ui:order'] || [];
+  //Sorted array of errors according to uiOrder for correct error message order
+  const newErrors = errors.map(error => {
+    const newError = { ...error };
+
+    // Get content from inside the first square brackets
+    const match = newError.property.match(/\[(.*?)\]/);
+    if (match) {
+      // Remove single quotes
+      newError.property = match[1].replace(/'/g, '');
+    }
+
+    // If property starts with a dot and is not a number, remove dot and keep the rest, done for ex .autofill_age
+    else if (/^\./.test(newError.property)) {
+      newError.property = newError.property.replace('.', '');
+    }
+
+    return newError;
+
+    // Sort list of newErrors according to uiOrder
+  }).sort((a, b) => {
+    const indexA = uiOrder.indexOf(a.property);
+    const indexB = uiOrder.indexOf(b.property);
+    return indexA - indexB;
+  });
 
   return (
     <Paper
@@ -23,7 +48,7 @@ const ErrorList = ({ errors }: ErrorListProps) => {
           {intl.formatMessage({defaultMessage: 'Invalid inputs'})}
         </Typography>
         <List role="alert"  dense={true}>
-          {errors.map((error, i: number) => {
+          {newErrors.map((error, i: number) => {
             return (
               <ListItem key={i}>
                 <ListItemIcon>
