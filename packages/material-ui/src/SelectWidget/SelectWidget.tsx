@@ -129,7 +129,7 @@ const SelectWidget = ({
           onFocus={_onFocus}
           InputProps={{
             id: `${id}-input`,
-            "aria-describedby": utils.ariaDescribedBy(id, options),
+            "aria-describedby": utils.ariaDescribedBy(id, options, rawErrors),
             classes: {formControl: classes.inputFormControl }
           }}
           InputLabelProps={{

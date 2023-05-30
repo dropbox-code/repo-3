@@ -76,7 +76,7 @@ const TextareaWidget = ({
         onChange={_onChange}
         onBlur={_onBlur}
         onFocus={_onFocus}
-        InputProps={{ "aria-describedby": utils.ariaDescribedBy(id, options), classes: {
+        InputProps={{ "aria-describedby": utils.ariaDescribedBy(id, options, rawErrors), classes: {
             formControl: classes.inputFormControl
           }
         }}
