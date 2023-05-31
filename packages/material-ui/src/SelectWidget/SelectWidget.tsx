@@ -127,6 +127,7 @@ const SelectWidget = ({
           onChange={_onChange}
           onBlur={_onBlur}
           onFocus={_onFocus}
+          role="combobox"
           InputProps={{
             id: `${id}-input`,
             "aria-describedby": utils.ariaDescribedBy(id, options, rawErrors),
