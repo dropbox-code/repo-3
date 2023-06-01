@@ -9,6 +9,7 @@ import {
   isObject,
   mergeObjects,
 } from "./utils";
+import sift from "sift";
 let ajv = createAjvInstance();
 
 const localize = { en, fi, sv };
@@ -192,6 +193,107 @@ function addAnyOfAdditionalParams(errors = []) {
   return modifiedErrors;
 }
 
+const requiredExists = (formData, fieldConfig) => {
+  return sift(fieldConfig?.filter?.show?.query)(formData);
+};
+
+const transformRepeatableFormgroups = (formData, schema) => {
+  let errorFormdata = formData;
+  let errorSchema = { ...schema, properties: {} };
+
+  if (schema.type === "object" && schema.properties) {
+    for (const key in schema.properties) {
+      const {
+        formData: newFormdata,
+        errorSchema: newSchema,
+      } = transformRepeatableFormgroups(
+        formData?.[key],
+        schema.properties[key]
+      );
+      errorSchema.properties[key] = newSchema;
+      formData[key] = newFormdata;
+    }
+  } else if (schema.type === "array" && schema.items?.type === "object") {
+    errorSchema.type = "object";
+    const newConfig = {};
+    errorFormdata = {};
+    const items = { ...schema.items };
+    for (const i in formData) {
+      const newSchema = { ...items, properties: { ...items.properties } };
+      const required = [...items.required];
+      if (schema.items?.required && schema.items.required.length > 0) {
+        const newRequired = schema.items.required.filter(key => {
+          const originalField = schema.items.originalConfig.elements.find(
+            element => element.key === key
+          );
+          return originalField.filter?.show
+            ? requiredExists(formData[i], originalField)
+            : true;
+        });
+        newSchema.required = newRequired;
+      }
+      const removeFromValidationKeys = Object.keys(newSchema.properties).filter(
+        key => {
+          const originalField = schema.items.originalConfig.elements.find(
+            element => element.key === key
+          );
+          return originalField.filter?.show
+            ? !requiredExists(formData[i], originalField)
+            : false;
+        }
+      );
+      removeFromValidationKeys.forEach(key => {
+        delete newSchema.properties[key];
+        if (required.indexOf(key) >= 0) {
+          required.splice(required.indexOf(key), 1);
+        }
+      });
+      newConfig[`${i}`] = newSchema;
+      errorFormdata[`${i}`] = formData[i];
+    }
+    errorSchema.properties = newConfig;
+  }
+  return { formData: errorFormdata, errorSchema: errorSchema };
+};
+
+const addAnyOf = schema => {
+  let errorSchema = { ...schema, properties: {} };
+
+  if (schema?.type === "array" && schema?.items?.type === "object") {
+    errorSchema.items = addAnyOf(schema.items);
+  } else if (schema.type === "object" && schema.requireAtLeastOne) {
+    const anyOf = [];
+    for (const key in schema.properties) {
+      if (
+        !schema.properties[key].additionalType ||
+        schema.properties[key].additionalType === "consent"
+      ) {
+        const schemaObject = { required: [`${key}`], properties: {} };
+        if (schema.properties[key].type === "string") {
+          schemaObject.properties[key] = {
+            minLength: 1,
+          };
+        } else if (schema.properties[key].type === "array") {
+          schemaObject.properties[key] = {
+            minItems: 1,
+          };
+        }
+        anyOf.push(schemaObject);
+      }
+    }
+    errorSchema = {
+      ...schema,
+      anyOf: anyOf,
+    };
+  } else if (schema.type === "object" && schema.properties) {
+    for (const key in schema.properties) {
+      errorSchema.properties[key] = addAnyOf(schema.properties[key]);
+    }
+  }
+
+  return errorSchema;
+};
+
 /**
  * This function processes the formData with a user `validate` contributed
  * function, which receives the form data and an `errorHandler` object that
@@ -305,49 +407,16 @@ export default function validateFormData(
     false
   );
 
-  const addAnyOf = schema => {
-    let errorSchema = { ...schema, properties: {} };
-
-    if (schema?.type === "array" && schema?.items?.type === "object") {
-      errorSchema.items = addAnyOf(schema.items);
-    } else if (schema.type === "object" && schema.requireAtLeastOne) {
-      const anyOf = [];
-      for (const key in schema.properties) {
-        if (
-          !schema.properties[key].additionalType ||
-          schema.properties[key].additionalType === "consent"
-        ) {
-          const schemaObject = { required: [`${key}`], properties: {} };
-          if (schema.properties[key].type === "string") {
-            schemaObject.properties[key] = {
-              minLength: 1,
-            };
-          } else if (schema.properties[key].type === "array") {
-            schemaObject.properties[key] = {
-              minItems: 1,
-            };
-          }
-          anyOf.push(schemaObject);
-        }
-      }
-      errorSchema = {
-        ...schema,
-        anyOf: anyOf,
-      };
-    } else if (schema.type === "object" && schema.properties) {
-      for (const key in schema.properties) {
-        errorSchema.properties[key] = addAnyOf(schema.properties[key]);
-      }
-    }
-
-    return errorSchema;
-  };
-
   const anyOfSchema = addAnyOf(schema);
+  const {
+    formData: newFormData,
+    errorSchema: newSchema,
+  } = transformRepeatableFormgroups(formData, anyOfSchema);
 
   let validationError = null;
   try {
-    ajv.validate(anyOfSchema, formData);
+    //ajv.validate(anyOfSchema, formData);
+    ajv.validate(newSchema, newFormData);
   } catch (err) {
     validationError = err;
   }
