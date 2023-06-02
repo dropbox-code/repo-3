@@ -20,7 +20,7 @@ const ErrorList = ({ errors, uiSchema }: ErrorListProps) => {
     const newError = { ...error };
 
     // Get content from inside the first square brackets
-    const match = newError.property.match(/\[(.*?)\]/);
+    const match = newError.property ? newError.property.match(/\[(.*?)\]/) : undefined;
     if (match) {
       // Remove single quotes
       newError.property = match[1].replace(/'/g, '');
