@@ -70,13 +70,11 @@ const ArrayFieldTitle = ({
 };
 
 type ArrayFieldDescriptionProps = {
-  DescriptionField: any;
   idSchema: IdSchema;
   description: string;
 };
 
 const ArrayFieldDescription = ({
-  DescriptionField,
   idSchema,
   description,
 }: ArrayFieldDescriptionProps) => {
@@ -85,7 +83,8 @@ const ArrayFieldDescription = ({
   }
 
   const id = utils.descriptionId(idSchema.$id);
-  return <DescriptionField id={id} description={description} />;
+  //return <DescriptionField id={id} description={description} />;
+  return <Typography component="p" variant="subtitle2" id={id}>{description}</Typography>
 };
 
 // Used in the two templates
@@ -214,12 +213,13 @@ const DefaultFixedArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
       />
 
       {(props.uiSchema['ui:description'] || props.schema.description) && (
-        <div
-          className="field-description"
-          key={`field-description-${props.idSchema.$id}`}
-        >
-          {props.uiSchema['ui:description'] || props.schema.description}
-        </div>
+        <ArrayFieldDescription
+          key={`array-field-description-${props.idSchema.$id}`}
+          idSchema={props.idSchema}
+          description={
+            props.uiSchema['ui:description'] || props.schema.description
+          }
+        />
       )}
 
       <div
@@ -258,7 +258,6 @@ const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
         {(props.uiSchema['ui:description'] || props.schema.description) && (
           <ArrayFieldDescription
             key={`array-field-description-${props.idSchema.$id}`}
-            DescriptionField={props.DescriptionField}
             idSchema={props.idSchema}
             description={
               props.uiSchema['ui:description'] || props.schema.description

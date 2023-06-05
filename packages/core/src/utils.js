@@ -1283,20 +1283,21 @@ export const errorsId = id => `${id}__errors`;
 
 // Create a list of element ids that contain additional information about the
 // field
-export const ariaDescribedBy = (id, uiSchema) => {
+export const ariaDescribedBy = (id, uiSchema, rawErrors) => {
+  const listElement = uiSchema?.["ui:options"]?.element?.list;
   let ariaId = `${
     uiSchema["ui:description"] ||
     uiSchema?.element?.description ||
     uiSchema["ui:options"]?.element?.description
-      ? descriptionId(id, uiSchema)
+      ? descriptionId(listElement ? id.substring(0, id.lastIndexOf("_")) : id)
       : ""
   } ${
     uiSchema["ui:help"] ||
     uiSchema?.element?.help ||
     uiSchema["ui:options"]?.element?.help
-      ? helpId(id, uiSchema)
+      ? helpId(listElement ? id.substring(0, id.lastIndexOf("_")) : id)
       : ""
-  }`;
+  } ${rawErrors?.length > 0 ? errorsId(id) : ""}`;
   if (ariaId !== "" && ariaId.length > 2) {
     return ariaId;
   }
