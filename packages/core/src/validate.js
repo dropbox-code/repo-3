@@ -219,14 +219,16 @@ const transformRepeatableFormgroups = (formData, schema) => {
     errorFormdata = {};
     const items = { ...schema.items };
     for (const i in formData) {
-      const newSchema = { ...items, properties: { ...items.properties } };
-      const required = [...items.required];
+      const newSchema = items
+        ? { ...items, properties: { ...items?.properties } }
+        : { properties: {} };
+      const required = items?.required ? [...items.required] : [];
       if (schema.items?.required && schema.items.required.length > 0) {
         const newRequired = schema.items.required.filter(key => {
-          const originalField = schema.items.originalConfig.elements.find(
+          const originalField = schema.items?.originalConfig?.elements?.find(
             element => element.key === key
           );
-          return originalField.filter?.show
+          return originalField?.filter?.show
             ? requiredExists(formData[i], originalField)
             : true;
         });
@@ -234,10 +236,10 @@ const transformRepeatableFormgroups = (formData, schema) => {
       }
       const removeFromValidationKeys = Object.keys(newSchema.properties).filter(
         key => {
-          const originalField = schema.items.originalConfig.elements.find(
+          const originalField = schema.items?.originalConfig?.elements?.find(
             element => element.key === key
           );
-          return originalField.filter?.show
+          return originalField?.filter?.show
             ? !requiredExists(formData[i], originalField)
             : false;
         }
