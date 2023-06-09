@@ -289,7 +289,8 @@ function SchemaFieldRender(props) {
   let { __errors, ...fieldErrorSchema } = errorSchema;
   if (
     uiSchema["ui:options"]?.element?.type === "dateRange" &&
-    (errorSchema?.start || errorSchema?.end)
+    (errorSchema?.start || errorSchema?.end) &&
+    (errorSchema?.start?.__errors[0] || errorSchema?.end?.__errors[0])
   ) {
     __errors = [];
     __errors.push(errorSchema?.start?.__errors[0]);
