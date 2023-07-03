@@ -13,12 +13,13 @@ const getScore = (choices: {enumNames: string, enum?: string, meta?: {score: num
   if (!choice) {
     choice = choices[Number(value)];
   }
-  return choice && choice.meta ? choice.meta.score : 0;
+  return choice && choice.meta ? choice.meta.score : undefined;
 }
 
 const getScores = (choices: {enumNames: string, enum?: string, meta?: {score: number}}[], value: string[]) => {
   if (value.length > 0) {
     let choiceString = value.map(item => getScore(choices, item)) as any[];
+    choiceString = choiceString.filter(value => value !== undefined);
     return choiceString.length > 0 ? choiceString.join(', ') : '';
   } else {
     return "";
