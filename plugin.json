@@ -1,10 +1,10 @@
 {
-    "name": "My User Information",
-    "version": "0.0.1",
-    "description": "Description of my_user_information.",
-    "author_name": "Me",
-    "author_url": "https://mywebsite.me",
-    "plugin_url": "https://github.com/my_name/my_user_information",
-    "tags": "cat, template, example",
-    "thumb": "https://raw.githubusercontent.com/my_repo_path/my_user_information.png"
+    "name": "我的用户信息",
+    "version": "0.0.2",
+    "description": "获取当前登录的用户信息，包括头像、邮箱、描述、剩余聊天使用次数等。",
+    "author_name": "Kevin Zhang",
+    "author_url": "https://github.com/KevinZhang19870314",
+    "plugin_url": "https://github.com/KevinZhang19870314/my-user-info",
+    "tags": "bot, user info, db",
+    "thumb": ""
 }
