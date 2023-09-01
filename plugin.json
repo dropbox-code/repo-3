@@ -1,6 +1,6 @@
 {
     "name": "我的用户信息",
-    "version": "0.0.6",
+    "version": "0.0.7",
     "description": "获取当前登录的用户信息，包括头像、邮箱、描述、剩余聊天使用次数等。聊天窗口输入‘我的用户信息’。",
     "author_name": "Kevin Zhang",
     "author_url": "https://github.com/KevinZhang19870314",
