@@ -5,7 +5,6 @@ import FormControlLabel from "@material-ui/core/FormControlLabel";
 import { FormHelperText } from "@material-ui/core";
 
 import { utils, WidgetProps } from '@visma/rjsf-core';
-import FormControl from '@material-ui/core/FormControl';
 
 
 const CheckboxWidget = (props: WidgetProps) => {
@@ -30,7 +29,7 @@ const CheckboxWidget = (props: WidgetProps) => {
   }: React.FocusEvent<HTMLButtonElement>) => onFocus(id, value);
 
   return (
-    <FormControl component="fieldset">
+    <>
       {options.description && <FormHelperText>{options.description}</FormHelperText>}
       <FormControlLabel
         control={
@@ -52,7 +51,7 @@ const CheckboxWidget = (props: WidgetProps) => {
           { required && " *"}
         </span>}
       />
-    </FormControl>
+    </>
   );
 };
 
