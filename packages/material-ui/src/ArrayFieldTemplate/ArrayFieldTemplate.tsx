@@ -226,9 +226,12 @@ const DefaultFixedArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
         className="row array-item-list"
         key={`array-item-list-${props.idSchema.$id}`}
       >
-        {props.items && props.items.map(p => DefaultArrayItem(
-          {...p, size: props.items.length, extraOptions: (props.schema as any).extraListOptions}
-        ))}
+          {props.items && props.items.map(p => DefaultArrayItem(
+              {...p,
+                  size: props.items.length,
+                  hasRemove: props.items.length > (props.schema.minItems ? props.schema.minItems : 0) && p.hasRemove,
+                  extraOptions: (props.schema as any).extraListOptions}
+          ))}
       </div>
 
       {props.canAdd && (
@@ -267,7 +270,10 @@ const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
 
         <Grid container={true} key={`array-item-list-${props.idSchema.$id}`}>
           {props.items && props.items.map(p => DefaultArrayItem(
-            {...p, size: props.items.length, extraOptions: (props.schema as any).extraListOptions}
+            {...p,
+                size: props.items.length,
+                hasRemove: props.items.length > (props.schema.minItems ? props.schema.minItems : 0) && p.hasRemove,
+                extraOptions: (props.schema as any).extraListOptions}
           ))}
 
           {props.canAdd && (
