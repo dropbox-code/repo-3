@@ -43,15 +43,16 @@ const ErrorList = ({ errors, uiSchema }: ErrorListProps) => {
   return (
     <Paper
       elevation={2}>
-      <Box id="formula-validation-errors" mb={2} p={2} role="alert">
-        {uiSchema.formWithSteps ? <Typography component="h4"  variant="h6">
-          {intl.formatMessage({defaultMessage: 'Invalid inputs'})}
-        </Typography>
+      <Box id="formula-validation-errors" mb={2} p={2}>
+        {uiSchema.formWithSteps ?
+          <Typography component="h4"  variant="h6" role="alert">
+            {intl.formatMessage({defaultMessage: 'Invalid inputs'})}
+          </Typography>
           :
-          <Typography component="h2"  variant="h6">
+          <Typography component="h2"  variant="h6" role="alert">
             {intl.formatMessage({defaultMessage: 'Invalid inputs'})}
           </Typography> }
-        <List dense={true}>
+        <List dense={true} role="alert">
           {newErrors.map((error, i: number) => {
             return (
               <ListItem key={i}>
