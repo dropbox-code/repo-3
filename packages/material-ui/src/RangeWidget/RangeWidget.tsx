@@ -120,6 +120,8 @@ const RangeWidget = ({
   onChange,
   label,
   id,
+  uiSchema,
+  rawErrors
 }: WidgetProps) => {
   const sliderProps = { value, label, id, ...rangeSpec(schema) };
   const scaleProps = options.element
@@ -145,6 +147,7 @@ const RangeWidget = ({
       <Slider
         className={classes.slider}
         aria-label={utils.generateAriaLabel(label, options, required)}
+        aria-describedby={utils.ariaDescribedBy(id, uiSchema, rawErrors)}
         disabled={disabled || readonly}
         onChange={_onChange}
         onBlur={_onBlur}

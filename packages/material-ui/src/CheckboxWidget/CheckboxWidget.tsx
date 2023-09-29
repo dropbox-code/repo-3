@@ -19,6 +19,8 @@ const CheckboxWidget = (props: WidgetProps) => {
     onFocus,
     options,
     required,
+    uiSchema,
+    rawErrors
   } = props;
   const _onChange = ({}, checked: boolean) => onChange(checked);
   const _onBlur = ({
@@ -45,6 +47,7 @@ const CheckboxWidget = (props: WidgetProps) => {
           />
         }
         aria-label={utils.generateAriaLabel(props.label, options, required)}
+        aria-describedby={utils.ariaDescribedBy(id, uiSchema, rawErrors)}
         label={
         <span>
           { props.label }
