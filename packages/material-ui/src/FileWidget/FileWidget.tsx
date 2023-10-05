@@ -116,6 +116,7 @@ const FileWidget = ({
   label,
   required,
   uiSchema,
+  rawErrors
 }: WidgetProps) => {
   const [state, setState] = useState<FileInfo[]>();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -139,8 +140,8 @@ const FileWidget = ({
 
   const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     processFiles(event.target.files).then((filesInfo: any) => {
-      const maxFileSizeMb = (uiSchema["ui:options"]?.element as any)
-        ?.maxFileSizeMb;
+      // @ts-ignore
+      const maxFileSizeMb = (uiSchema["ui:options"]?.element as any)?.maxFileSizeMb;
 
       if (maxFileSizeMb) {
         const maxFileSize = maxFileSizeMb * Math.pow(1000, 2);
@@ -273,6 +274,7 @@ const FileWidget = ({
             defaultMessage: "Choose file",
           })}`
         }
+        aria-describedby={utils.ariaDescribedBy(id, uiSchema, rawErrors)}
         variant="outlined"
         onClick={() => inputRef.current!.click()}>
         {intl.formatMessage({ defaultMessage: "Choose file" })}

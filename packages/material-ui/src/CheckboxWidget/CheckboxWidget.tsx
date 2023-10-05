@@ -19,6 +19,7 @@ const CheckboxWidget = (props: WidgetProps) => {
     onFocus,
     options,
     required,
+    rawErrors
   } = props;
   const _onChange = ({}, checked: boolean) => onChange(checked);
   const _onBlur = ({
@@ -30,7 +31,7 @@ const CheckboxWidget = (props: WidgetProps) => {
 
   return (
     <>
-      {options.description && <FormHelperText>{options.description}</FormHelperText>}
+      {options.description && <FormHelperText id={`${id}__description`}>{options.description}</FormHelperText>}
       <FormControlLabel
         control={
           <Checkbox
@@ -42,6 +43,7 @@ const CheckboxWidget = (props: WidgetProps) => {
             onChange={_onChange}
             onBlur={_onBlur}
             onFocus={_onFocus}
+            aria-describedby={utils.ariaDescribedBy(id, {'ui:options': {element: props.options}}, rawErrors)}
           />
         }
         aria-label={utils.generateAriaLabel(props.label, options, required)}

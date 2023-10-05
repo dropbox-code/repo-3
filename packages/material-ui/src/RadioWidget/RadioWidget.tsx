@@ -29,6 +29,8 @@ const RadioWidget = ({
   onChange,
   onBlur,
   onFocus,
+  uiSchema,
+  rawErrors
 }: WidgetProps) => {
   const { enumOptions, enumDisabled } = options;
 
@@ -49,7 +51,7 @@ const RadioWidget = ({
   return (
     <div style={{display: 'flex'}}>
       <div style={{flex: '1 1'}}>
-        <FormControl component="fieldset">
+        <FormControl aria-describedby={utils.ariaDescribedBy(id, uiSchema, rawErrors)} component="fieldset">
           <legend style={{position: 'absolute', clip: 'rect(0,0,0,0)'}}>{utils.generateAriaLabel(label, options, required)}</legend>
           {schema.type === 'boolean' && <FormHelperText component="span" >{options.description}</FormHelperText>}
           <RadioGroup

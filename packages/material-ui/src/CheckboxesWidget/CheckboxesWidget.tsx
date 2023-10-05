@@ -51,6 +51,7 @@ const CheckboxesWidget = ({
   onChange,
   onBlur,
   onFocus,
+  rawErrors
 }: WidgetProps) => {
   const { enumOptions, enumDisabled, inline, showScore, element } = options;
   const rawChoices = element ?
@@ -81,7 +82,7 @@ const CheckboxesWidget = ({
       <div style={{flex: '1 1'}}>
         <FormControl component="fieldset">
           <legend style={{position: 'absolute', clip: 'rect(0,0,0,0)'}}>{utils.generateAriaLabel(label, options, required)}</legend>
-          <FormGroup row={!!inline}>
+          <FormGroup aria-describedby={utils.ariaDescribedBy(id, {'ui:options': {element: options}}, rawErrors)} row={!!inline}>
             {(enumOptions as any).map((option: any, index: number) => {
               const checked = value.indexOf(option.value) !== -1;
               const itemDisabled =
