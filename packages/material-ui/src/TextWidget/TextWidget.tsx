@@ -54,11 +54,13 @@ const TextWidget = ({
     ? (options.element as {bannedCharacters: string}).bannedCharacters
     : undefined;
   const allowedCharacters = schema ? (schema as {allowedCharacters: string}).allowedCharacters : undefined;
+  const numberOfDecimals = schema
+      ? (schema as {numberOfDecimals: number}).numberOfDecimals
+      : undefined;
   const _onChange = ({
     target: { value },
   }: React.ChangeEvent<HTMLInputElement>) => {
-    const rawValue = (value === "" ? options.emptyValue : value);
-    let cleanedValue = rawValue;
+    let cleanedValue = (value === "" ? options.emptyValue : value);
     if (typeof cleanedValue === 'string' && bannedCharacters && bannedCharacters.length > 0) {
       for (const character of bannedCharacters) {
         cleanedValue = cleanedValue.split(character).join('');
@@ -71,6 +73,12 @@ const TextWidget = ({
         }
       }
       cleanedValue = filteredString;
+    }
+    if (numberOfDecimals !== undefined && cleanedValue) {
+      const pointIndex = cleanedValue.toString().indexOf('.');
+      if (pointIndex > 0 && cleanedValue.toString().length - 1 - pointIndex > numberOfDecimals) {
+        cleanedValue = Number(cleanedValue.toString().substring(0, pointIndex + numberOfDecimals + 1));
+      }
     }
     onChange(cleanedValue ?
       schema.maxLength ? String(cleanedValue).substring(0, Number(schema.maxLength)) : cleanedValue
