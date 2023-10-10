@@ -1286,7 +1286,32 @@ export const errorsId = id => `${id}__errors`;
 export const ariaDescribedBy = (id, uiSchema, rawErrors) => {
   let ariaId = "";
   if (uiSchema) {
+    const describedbyIds = [];
     const listElement = uiSchema?.["ui:options"]?.element?.list;
+    const description =
+      uiSchema["ui:description"] ||
+      uiSchema?.element?.description ||
+      uiSchema["ui:options"]?.element?.description
+        ? descriptionId(listElement ? id.substring(0, id.lastIndexOf("_")) : id)
+        : undefined;
+    const help =
+      uiSchema["ui:help"] ||
+      uiSchema?.element?.help ||
+      uiSchema["ui:options"]?.element?.help
+        ? helpId(listElement ? id.substring(0, id.lastIndexOf("_")) : id)
+        : undefined;
+    const errors = rawErrors?.length > 0 ? errorsId(id) : undefined;
+    if (description) {
+      describedbyIds.push(description);
+    }
+    if (help) {
+      describedbyIds.push(help);
+    }
+    if (errors) {
+      describedbyIds.push(errors);
+    }
+    ariaId = describedbyIds.join(" ");
+    /*
     ariaId = `${
       uiSchema["ui:description"] ||
       uiSchema?.element?.description ||
@@ -1300,6 +1325,7 @@ export const ariaDescribedBy = (id, uiSchema, rawErrors) => {
         ? helpId(listElement ? id.substring(0, id.lastIndexOf("_")) : id)
         : ""
     } ${rawErrors?.length > 0 ? errorsId(id) : ""}`;
+    */
   }
   if (ariaId !== "" && ariaId.length > 2) {
     return ariaId;
