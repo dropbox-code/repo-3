@@ -82,9 +82,11 @@ function toErrorSchema(errors) {
       // to avoid name collision with a possible sub schema field named
       // "errors" (see `validate.createErrorHandler`).
       parent.__errors = parent.__errors.concat(message);
+      parent.property = property;
     } else {
       if (message) {
         parent.__errors = [message];
+        parent.property = property;
       }
     }
     return errorSchema;
@@ -93,12 +95,16 @@ function toErrorSchema(errors) {
 
 export function toErrorList(errorSchema, fieldName = "root") {
   // XXX: We should transform fieldName as a full field path string.
+  if (typeof errorSchema !== "object" || errorSchema === null) {
+    return [];
+  }
   let errorList = [];
   if ("__errors" in errorSchema) {
     errorList = errorList.concat(
       errorSchema.__errors.map(stack => {
         return {
           stack: `${stack}`,
+          property: errorSchema.property,
         };
       })
     );
@@ -134,14 +140,30 @@ function createErrorHandler(formData) {
   return handler;
 }
 
-function unwrapErrorHandler(errorHandler) {
+function unwrapErrorHandler(errorHandler, currentKey = null) {
+  if (typeof errorHandler !== "object" || errorHandler === null) {
+    return errorHandler;
+  }
   return Object.keys(errorHandler).reduce((acc, key) => {
     if (key === "addError") {
       return acc;
-    } else if (key === "__errors") {
-      return { ...acc, [key]: errorHandler[key] };
     }
-    return { ...acc, [key]: unwrapErrorHandler(errorHandler[key]) };
+    if (
+      key === "__errors" &&
+      Array.isArray(errorHandler[key]) &&
+      errorHandler[key].length > 0
+    ) {
+      let errorObj = { [key]: errorHandler[key] };
+      if (currentKey !== null) {
+        errorObj.property = `['${currentKey}']`;
+      }
+      return { ...acc, ...errorObj };
+    }
+    const processed = unwrapErrorHandler(errorHandler[key], key);
+    if (processed && Object.keys(processed).length > 0) {
+      return { ...acc, [key]: processed };
+    }
+    return acc;
   }, {});
 }
 
