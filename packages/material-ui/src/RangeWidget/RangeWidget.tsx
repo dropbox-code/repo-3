@@ -15,7 +15,7 @@ const useStyles = (props: { markWidth: number; }) => makeStyles({
       whiteSpace: 'normal',
       textAlign: 'center',
       width: props.markWidth + '%',
-      height: '75px',
+      height: '80px',
       overflow: 'hidden',
       '&[style="left: 0%;"]': {
         textAlign: 'left',
