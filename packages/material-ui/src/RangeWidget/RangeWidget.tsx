@@ -7,14 +7,16 @@ import { utils } from "@visma/rjsf-core";
 import { WidgetProps } from "@visma/rjsf-core";
 
 const { rangeSpec } = utils;
-const useStyles = makeStyles({
+const useStyles = (props: { markWidth: number; }) => makeStyles({
   slider: {
     marginTop: '45px',
     '& .MuiSlider-markLabel': {
       wordWrap: 'break-word',
       whiteSpace: 'normal',
       textAlign: 'center',
-      width: '15%',
+      width: props.markWidth + '%',
+      height: '75px',
+      overflow: 'hidden',
       '&[style="left: 0%;"]': {
         textAlign: 'left',
         transform: 'translateX(0%)'
@@ -136,12 +138,13 @@ const RangeWidget = ({
     target: { value },
   }: React.FocusEvent<HTMLInputElement>) => onFocus(id, value);
 
-  const classes = useStyles();
   const marks = scaleProps.widget === 'customScale'
     ? scaleProps.scaleMarks
     : scaleProps.widget === 'automaticScale'
       ? generateMarks(sliderProps.min, sliderProps.max, sliderProps.step)
       : generateEndpointMarks(sliderProps.min, sliderProps.max);
+  const markWidth = marks && Array.isArray(marks) ? Math.floor(95 / marks.length) : 15;
+  const classes = useStyles({markWidth: markWidth > 15 ? markWidth : 15})();
   return (
     <div className={classes.sliderRoot}>
       <Slider
