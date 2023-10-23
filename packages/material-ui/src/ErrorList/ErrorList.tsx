@@ -1,6 +1,5 @@
 import React from 'react';
 import { useIntl } from 'react-intl';
-
 import Box from '@material-ui/core/Box';
 import Typography from '@material-ui/core/Typography';
 import List from '@material-ui/core/List';
@@ -9,8 +8,8 @@ import ListItemIcon from '@material-ui/core/ListItemIcon';
 import ErrorIcon from '@material-ui/icons/Error';
 import ListItemText from '@material-ui/core/ListItemText';
 import Paper from '@material-ui/core/Paper';
-
 import { ErrorListProps } from '@visma/rjsf-core';
+
 
 const ErrorList = ({ errors, uiSchema }: ErrorListProps) => {
   const intl = useIntl();
