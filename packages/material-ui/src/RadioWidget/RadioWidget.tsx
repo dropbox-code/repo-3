@@ -51,7 +51,7 @@ const RadioWidget = ({
   return (
     <div style={{display: 'flex'}}>
       <div style={{flex: '1 1'}}>
-        <FormControl aria-describedby={utils.ariaDescribedBy(id, uiSchema, rawErrors)} component="fieldset">
+        <FormControl component="fieldset">
           <legend style={{position: 'absolute', clip: 'rect(0,0,0,0)'}}>{utils.generateAriaLabel(label, options, required)}</legend>
           {schema.type === 'boolean' && <FormHelperText component="span" >{options.description}</FormHelperText>}
           <RadioGroup
@@ -67,6 +67,7 @@ const RadioWidget = ({
               return (
                 <FormControlLabel
                   control={<Radio color="primary" key={i} />}
+                  aria-describedby={utils.ariaDescribedBy(id, uiSchema, rawErrors)}
                   style={{marginTop: '6px'}}
                   label={`${option.label}`}
                   value={`${option.value}`}

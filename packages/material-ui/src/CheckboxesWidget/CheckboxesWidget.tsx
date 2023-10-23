@@ -77,12 +77,14 @@ const CheckboxesWidget = ({
     target: { value },
   }: React.FocusEvent<HTMLButtonElement>) => onFocus(id, value);
 
+  const ariaDescribedby = utils.ariaDescribedBy(id, {'ui:options': {element: options}}, rawErrors);
+
   return (
     <div style={{display: 'flex'}}>
       <div style={{flex: '1 1'}}>
         <FormControl component="fieldset">
           <legend style={{position: 'absolute', clip: 'rect(0,0,0,0)'}}>{utils.generateAriaLabel(label, options, required)}</legend>
-          <FormGroup aria-describedby={utils.ariaDescribedBy(id, {'ui:options': {element: options}}, rawErrors)} row={!!inline}>
+          <FormGroup row={!!inline}>
             {(enumOptions as any).map((option: any, index: number) => {
               const checked = value.indexOf(option.value) !== -1;
               const itemDisabled =
@@ -104,6 +106,7 @@ const CheckboxesWidget = ({
                   key={index}
                   style={{marginTop: '6px'}}
                   label={option.label}
+                  aria-describedby={ariaDescribedby}
                 />
               );
             })}
