@@ -36,7 +36,7 @@ const ObjectFieldTemplate = ({
 }: ObjectFieldTemplateProps) => {
   const classes = useStyles();
 
-  const isInArray = idSchema.$id.split('_').length >= 3;
+  const isInArray = (schema as any).originalConfig ? (schema as any).originalConfig.listItem : false;
 
   return (
     <>
