@@ -82,7 +82,7 @@ const CheckboxesWidget = ({
   return (
     <div style={{display: 'flex'}}>
       <div style={{flex: '1 1'}}>
-        <FormControl component="fieldset">
+        <FormControl component="fieldset" aria-describedby={ariaDescribedby}>
           <legend style={{position: 'absolute', clip: 'rect(0,0,0,0)'}}>{utils.generateAriaLabel(label, options, required)}</legend>
           <FormGroup row={!!inline}>
             {(enumOptions as any).map((option: any, index: number) => {
@@ -106,7 +106,6 @@ const CheckboxesWidget = ({
                   key={index}
                   style={{marginTop: '6px'}}
                   label={option.label}
-                  aria-describedby={ariaDescribedby}
                 />
               );
             })}
