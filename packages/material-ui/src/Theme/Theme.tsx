@@ -32,8 +32,8 @@ const Theme: ThemeProps = {
   ArrayFieldTemplate,
   fields: { ...fields, ...Fields },
   FieldTemplate,
-  ObjectFieldTemplate,
   widgets: { ...widgets, ...Widgets },
+  ObjectFieldTemplate,
   ErrorList,
 };
 
