@@ -261,9 +261,10 @@ const PaginationBar = (props: {currentPage: number, pageAmount: number, setPage:
 
 const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
   const paginated = (props.schema.items as {pagination?: boolean})!.pagination !== undefined ? (props.schema.items as {pagination?: boolean})!.pagination : false;
-  const elementsPerPage = paginated ? (props.schema.items as {elementsPerPage: number})!.elementsPerPage : -1;
+  //const elementsPerPage = paginated ? (props.schema.items as {elementsPerPage: number})!.elementsPerPage : -1;
   const [visibleItems, setVisibleItems] = useState([]);
   const [page, setPage] = useState(0);
+  const [elementsPerPage, setElementsPerPage] = useState(5);
   const [pageAmount, setPageAmount] = useState(
     paginated
       ? Math.ceil(props.items.length / elementsPerPage)
@@ -275,13 +276,13 @@ const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
       // @ts-ignore
       setVisibleItems(props.items.slice(elementsPerPage * page, elementsPerPage * page + elementsPerPage));
     }
-  }, [page, props.items]);
+  }, [page, props.items, elementsPerPage]);
 
   useEffect(() => {
     setPageAmount(paginated
       ? Math.ceil(props.items.length / elementsPerPage)
       : 1)
-  }, [props.items])
+  }, [props.items, elementsPerPage])
 
   return (
     <Paper elevation={2}>
@@ -337,6 +338,9 @@ const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
           )}
         </Grid>
       </Box>
+      {paginated && <p style={{marginLeft: 20}}>
+          Elementtejä sivulla: {[5, 10, 15].map(i => <Button disabled={i === elementsPerPage} onClick={() => setElementsPerPage(i)}>{i}</Button>)}
+      </p>}
       {paginated && pageAmount > 1 && <PaginationBar currentPage={page} pageAmount={pageAmount} setPage={setPage}/>}
     </Paper>
   );
