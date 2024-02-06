@@ -329,7 +329,10 @@ const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
                 <Box mt={2}>
                   <AddButton
                     className="array-item-add"
-                    onClick={props.onAddClick}
+                    onClick={paginated && props.items.length > 0 ? () => {
+                      props.items[0].onAddIndexClick((page+1)*elementsPerPage)()
+                      setPage(page + 1);
+                    } : props.onAddClick}
                     disabled={props.disabled || props.readonly}
                   />
                 </Box>
