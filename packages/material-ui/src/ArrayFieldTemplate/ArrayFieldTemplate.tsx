@@ -265,11 +265,22 @@ const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
   const [visibleItems, setVisibleItems] = useState([]);
   const [page, setPage] = useState(0);
   const [elementsPerPage, setElementsPerPage] = useState(5);
+  const [scrollIntoView, setScrollIntoView] = useState(false);
   const [pageAmount, setPageAmount] = useState(
     paginated
       ? Math.ceil(props.items.length / elementsPerPage)
       : 1
   );
+
+  useEffect(() => {
+    if (visibleItems && visibleItems.length > 0 && scrollIntoView) {
+      // @ts-ignore
+      const firstElement = document.getElementById(props.idSchema.$id + '__title');
+      firstElement!.focus();
+      firstElement!.scrollIntoView({behavior: 'smooth'});
+      setScrollIntoView(false);
+    }
+  }, [visibleItems]);
 
   useEffect(() => {
     if (page > -1) {
@@ -282,7 +293,12 @@ const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
     setPageAmount(paginated
       ? Math.ceil(props.items.length / elementsPerPage)
       : 1)
-  }, [props.items, elementsPerPage])
+  }, [props.items, elementsPerPage]);
+
+  const handlePageChange = (pageNumber: number) => {
+    setPage(pageNumber);
+    setScrollIntoView(true);
+  }
 
   return (
     <Paper elevation={2}>
@@ -306,7 +322,7 @@ const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
           />
         )}
 
-        {paginated && pageAmount > 1 && <PaginationBar currentPage={page} pageAmount={pageAmount} setPage={setPage}/>}
+        {paginated && pageAmount > 1 && <PaginationBar currentPage={page} pageAmount={pageAmount} setPage={handlePageChange}/>}
 
         <Grid container={true} key={`array-item-list-${props.idSchema.$id}`}>
           {paginated && visibleItems && visibleItems.map(p => DefaultArrayItem(
@@ -330,6 +346,7 @@ const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
                   <AddButton
                     className="array-item-add"
                     onClick={paginated && props.items.length > 0 ? () => {
+                      setScrollIntoView(true);
                       props.items[0].onAddIndexClick((page+1)*elementsPerPage)()
                       setPage(page + 1);
                     } : props.onAddClick}
@@ -341,10 +358,10 @@ const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
           )}
         </Grid>
       </Box>
-      {paginated && <p style={{marginLeft: 20}}>
+      {paginated && pageAmount > 1 && <PaginationBar currentPage={page} pageAmount={pageAmount} setPage={handlePageChange}/>}
+      {paginated && <p style={{paddingLeft: 20, paddingBottom: 15}}>
           Elementtejä sivulla: {[5, 10, 15].map(i => <Button disabled={i === elementsPerPage} onClick={() => setElementsPerPage(i)}>{i}</Button>)}
       </p>}
-      {paginated && pageAmount > 1 && <PaginationBar currentPage={page} pageAmount={pageAmount} setPage={setPage}/>}
     </Paper>
   );
 };
