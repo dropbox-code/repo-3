@@ -49,5 +49,8 @@
   },
   "YZMoKC": {
     "defaultMessage": "Filen \"{name}\" accepteras inte. Den maximala filstorleken är {size}."
+  },
+  "vJPbhT": {
+    "defaultMessage": "Element per sida:"
   }
 }

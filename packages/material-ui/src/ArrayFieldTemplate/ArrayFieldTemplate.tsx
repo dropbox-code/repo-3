@@ -250,16 +250,19 @@ const PaginationBar = (props: {currentPage: number, pageAmount: number, setPage:
   const {currentPage, pageAmount, setPage} = props
   return (
     <>
-      <Button disabled={currentPage === 0} onClick={() => setPage(0)}>{'<<|'}</Button>
-      <Button disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>{'<|'}</Button>
-      {Array.from({length: pageAmount}, (_, i) => i).map(i => <Button disabled={i === currentPage} onClick={() => setPage(i)}>{i + 1}</Button>)}
-      <Button disabled={currentPage === pageAmount -1} onClick={() => setPage(currentPage + 1)}>{'|>'}</Button>
-      <Button disabled={currentPage === pageAmount -1} onClick={() => setPage(pageAmount - 1)}>{'|>>'}</Button>
+      <Button size="large" style={{minWidth: 20, marginLeft: 20}} disabled={currentPage === 0} onClick={() => setPage(0)}>{'<<|'}</Button>
+      <Button size="large" style={{minWidth: 20, marginLeft: 5}} disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>{'<|'}</Button>
+      {Array.from({length: pageAmount}, (_, i) => i).map(i =>
+        <Button size="large" style={{minWidth: 40, marginLeft: 5}} disabled={i === currentPage} onClick={() => setPage(i)}>{i + 1}</Button>
+      )}
+      <Button size="large" style={{minWidth: 20, marginLeft: 5}} disabled={currentPage === pageAmount -1} onClick={() => setPage(currentPage + 1)}>{'|>'}</Button>
+      <Button size="large" style={{minWidth: 20, marginLeft: 5}} disabled={currentPage === pageAmount -1} onClick={() => setPage(pageAmount - 1)}>{'|>>'}</Button>
     </>
   );
 }
 
 const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
+  const intl = useIntl();
   const paginated = (props.schema.items as {pagination?: boolean})!.pagination !== undefined ? (props.schema.items as {pagination?: boolean})!.pagination : false;
   //const elementsPerPage = paginated ? (props.schema.items as {elementsPerPage: number})!.elementsPerPage : -1;
   const [visibleItems, setVisibleItems] = useState([]);
@@ -360,7 +363,8 @@ const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
       </Box>
       {paginated && pageAmount > 1 && <PaginationBar currentPage={page} pageAmount={pageAmount} setPage={handlePageChange}/>}
       {paginated && <p style={{paddingLeft: 20, paddingBottom: 15}}>
-          Elementtejä sivulla: {[5, 10, 15].map(i => <Button disabled={i === elementsPerPage} onClick={() => setElementsPerPage(i)}>{i}</Button>)}
+        {intl.formatMessage({defaultMessage: 'Elements per page: '})}
+        {[5, 10, 15].map(i => <Button size="small" style={{minWidth: 1, maxWidth: 30, borderRadius: 32, marginLeft: 5}} variant="outlined" disabled={i === elementsPerPage} onClick={() => setElementsPerPage(i)}>{i}</Button>)}
       </p>}
     </Paper>
   );
