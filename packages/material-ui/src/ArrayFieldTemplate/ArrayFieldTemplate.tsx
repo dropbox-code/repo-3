@@ -1,4 +1,4 @@
-import React from 'react';
+import React, {useEffect, useState} from 'react';
 import { useIntl } from 'react-intl';
 
 import { utils } from '@visma/rjsf-core';
@@ -14,6 +14,7 @@ import IconButton from '../IconButton/IconButton';
 import Typography from '@material-ui/core/Typography';
 import Divider from '@material-ui/core/Divider';
 import { JSONSchema7 } from 'json-schema';
+import Button from "@material-ui/core/Button";
 
 const {
   isMultiSelect,
@@ -33,11 +34,11 @@ type ArrayFieldTitleProps = {
 };
 
 const ArrayFieldTitle = ({
-  schema,
-  idSchema,
-  title,
-  required
-}: ArrayFieldTitleProps) => {
+                           schema,
+                           idSchema,
+                           title,
+                           required
+                         }: ArrayFieldTitleProps) => {
   if (!title) {
     return null;
   }
@@ -75,9 +76,9 @@ type ArrayFieldDescriptionProps = {
 };
 
 const ArrayFieldDescription = ({
-  idSchema,
-  description,
-}: ArrayFieldDescriptionProps) => {
+                                 idSchema,
+                                 description,
+                               }: ArrayFieldDescriptionProps) => {
   if (!description) {
     return null;
   }
@@ -102,101 +103,101 @@ const DefaultArrayItem = (props: any) => {
   };
   const intl = useIntl();
   return (
-      <Grid container={true} key={props.key} alignItems="center">
-        {props.extraOptions && (
-          <Grid container style={{justifyContent: "flex-end"}}>
-            <Grid item={true}>
-              <Box mb={2}>
-                <AddButton
-                  className="array-item-add"
-                  onClick={props.onAddIndexClick(props.index)}
-                  disabled={props.disabled || props.readonly}
-                />
-              </Box>
-            </Grid>
+    <Grid container={true} key={props.key} alignItems="center">
+      {props.extraOptions && (
+        <Grid container style={{justifyContent: "flex-end"}}>
+          <Grid item={true}>
+            <Box mb={2}>
+              <AddButton
+                className="array-item-add"
+                onClick={props.onAddIndexClick(props.index)}
+                disabled={props.disabled || props.readonly}
+              />
+            </Box>
           </Grid>
-        )}
-        <Grid
-          item={true}
-          xs
-          // Causes datepicker popover to be shown only partially
-          // style={{ overflow: "auto" }}
-        >
-          <Box mb={2}>
-            <Paper elevation={2}>
-              <Box p={2}>{props.children}</Box>
-            </Paper>
-          </Box>
         </Grid>
+      )}
+      <Grid
+        item={true}
+        xs
+        // Causes datepicker popover to be shown only partially
+        // style={{ overflow: "auto" }}
+      >
+        <Box mb={2}>
+          <Paper elevation={2}>
+            <Box p={2}>{props.children}</Box>
+          </Paper>
+        </Box>
+      </Grid>
 
-        {props.hasToolbar && (
-          <Grid item>
-            <Grid container direction="column">
-              {(props.hasMoveUp || props.hasMoveDown) && props.extraOptions && (
+      {props.hasToolbar && (
+        <Grid item>
+          <Grid container direction="column">
+            {(props.hasMoveUp || props.hasMoveDown) && props.extraOptions && (
+              <IconButton
+                icon="double-arrow-up"
+                className="array-item-move-up"
+                aria-label={intl.formatMessage({defaultMessage: 'Move first'})}
+                //tabIndex={-1}
+                style={btnStyle as any}
+                iconProps={{ fontSize: 'small' }}
+                disabled={props.disabled || props.readonly || !props.hasMoveUp}
+                onClick={props.onReorderClick(props.index, 0)}
+              />
+            )}
+
+            {(props.hasMoveUp || props.hasMoveDown) && (
+              <>
                 <IconButton
-                  icon="double-arrow-up"
+                  icon="arrow-up"
                   className="array-item-move-up"
-                  aria-label={intl.formatMessage({defaultMessage: 'Move first'})}
+                  aria-label={intl.formatMessage({defaultMessage: 'Move up'})}
                   //tabIndex={-1}
                   style={btnStyle as any}
                   iconProps={{ fontSize: 'small' }}
                   disabled={props.disabled || props.readonly || !props.hasMoveUp}
-                  onClick={props.onReorderClick(props.index, 0)}
+                  onClick={props.onReorderClick(props.index, props.index - 1)}
                 />
-              )}
-
-              {(props.hasMoveUp || props.hasMoveDown) && (
-                <>
-                  <IconButton
-                    icon="arrow-up"
-                    className="array-item-move-up"
-                    aria-label={intl.formatMessage({defaultMessage: 'Move up'})}
-                    //tabIndex={-1}
-                    style={btnStyle as any}
-                    iconProps={{ fontSize: 'small' }}
-                    disabled={props.disabled || props.readonly || !props.hasMoveUp}
-                    onClick={props.onReorderClick(props.index, props.index - 1)}
-                  />
-                  <IconButton
-                    icon="arrow-down"
-                    aria-label={intl.formatMessage({defaultMessage: 'Move down'})}
-                    //tabIndex={-1}
-                    style={btnStyle as any}
-                    iconProps={{ fontSize: 'small' }}
-                    disabled={props.disabled || props.readonly || !props.hasMoveDown}
-                    onClick={props.onReorderClick(props.index, props.index + 1)}
-                  />
-                </>
-              )}
-
-              {(props.hasMoveUp || props.hasMoveDown) && props.extraOptions && (
                 <IconButton
-                  icon="double-arrow-down"
-                  className="array-item-move-up"
-                  aria-label={intl.formatMessage({defaultMessage: 'Move last'})}
+                  icon="arrow-down"
+                  aria-label={intl.formatMessage({defaultMessage: 'Move down'})}
                   //tabIndex={-1}
                   style={btnStyle as any}
                   iconProps={{ fontSize: 'small' }}
                   disabled={props.disabled || props.readonly || !props.hasMoveDown}
-                  onClick={props.onReorderClick(props.index, props.size - 1)}
+                  onClick={props.onReorderClick(props.index, props.index + 1)}
                 />
-              )}
+              </>
+            )}
 
-              {props.hasRemove && (
-                <IconButton
-                  icon="remove"
-                  aria-label={intl.formatMessage({defaultMessage: 'Remove item'})}
-                  //tabIndex={-1}
-                  style={btnStyle as any}
-                  iconProps={{ fontSize: 'small' }}
-                  disabled={props.disabled || props.readonly}
-                  onClick={props.onDropIndexClick(props.index)}
-                />
-              )}
-            </Grid>
+            {(props.hasMoveUp || props.hasMoveDown) && props.extraOptions && (
+              <IconButton
+                icon="double-arrow-down"
+                className="array-item-move-up"
+                aria-label={intl.formatMessage({defaultMessage: 'Move last'})}
+                //tabIndex={-1}
+                style={btnStyle as any}
+                iconProps={{ fontSize: 'small' }}
+                disabled={props.disabled || props.readonly || !props.hasMoveDown}
+                onClick={props.onReorderClick(props.index, props.size - 1)}
+              />
+            )}
+
+            {props.hasRemove && (
+              <IconButton
+                icon="remove"
+                aria-label={intl.formatMessage({defaultMessage: 'Remove item'})}
+                //tabIndex={-1}
+                style={btnStyle as any}
+                iconProps={{ fontSize: 'small' }}
+                disabled={props.disabled || props.readonly}
+                onClick={props.onDropIndexClick(props.index)}
+              />
+            )}
           </Grid>
-        )}
-      </Grid>
+        </Grid>
+      )}
+    </Grid>
   );
 };
 
@@ -226,12 +227,12 @@ const DefaultFixedArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
         className="row array-item-list"
         key={`array-item-list-${props.idSchema.$id}`}
       >
-          {props.items && props.items.map(p => DefaultArrayItem(
-              {...p,
-                  size: props.items.length,
-                  hasRemove: props.items.length > (props.schema.minItems ? props.schema.minItems : 0) && p.hasRemove,
-                  extraOptions: (props.schema as any).extraListOptions}
-          ))}
+        {props.items && props.items.map(p => DefaultArrayItem(
+          {...p,
+            size: props.items.length,
+            hasRemove: props.items.length > (props.schema.minItems ? props.schema.minItems : 0) && p.hasRemove,
+            extraOptions: (props.schema as any).extraListOptions}
+        ))}
       </div>
 
       {props.canAdd && (
@@ -245,7 +246,63 @@ const DefaultFixedArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
   );
 };
 
+const PaginationBar = (props: {currentPage: number, pageAmount: number, setPage: (page: number) => void}) => {
+  const {currentPage, pageAmount, setPage} = props
+  return (
+    <>
+      <Button size="large" style={{minWidth: 20, marginLeft: 20}} disabled={currentPage === 0} onClick={() => setPage(0)}>{'<<|'}</Button>
+      <Button size="large" style={{minWidth: 20, marginLeft: 5}} disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>{'<|'}</Button>
+      {Array.from({length: pageAmount}, (_, i) => i).map(i =>
+        <Button size="large" style={{minWidth: 40, marginLeft: 5}} disabled={i === currentPage} onClick={() => setPage(i)}>{i + 1}</Button>
+      )}
+      <Button size="large" style={{minWidth: 20, marginLeft: 5}} disabled={currentPage === pageAmount -1} onClick={() => setPage(currentPage + 1)}>{'|>'}</Button>
+      <Button size="large" style={{minWidth: 20, marginLeft: 5}} disabled={currentPage === pageAmount -1} onClick={() => setPage(pageAmount - 1)}>{'|>>'}</Button>
+    </>
+  );
+}
+
 const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
+  const intl = useIntl();
+  const paginated = (props.schema.items as {pagination?: boolean})!.pagination !== undefined ? (props.schema.items as {pagination?: boolean})!.pagination : false;
+  //const elementsPerPage = paginated ? (props.schema.items as {elementsPerPage: number})!.elementsPerPage : -1;
+  const [visibleItems, setVisibleItems] = useState([]);
+  const [page, setPage] = useState(0);
+  const [elementsPerPage, setElementsPerPage] = useState(5);
+  const [scrollIntoView, setScrollIntoView] = useState(false);
+  const [pageAmount, setPageAmount] = useState(
+    paginated
+      ? Math.ceil(props.items.length / elementsPerPage)
+      : 1
+  );
+
+  useEffect(() => {
+    if (visibleItems && visibleItems.length > 0 && scrollIntoView) {
+      // @ts-ignore
+      const firstElement = document.getElementById(props.idSchema.$id + '__title');
+      firstElement!.focus();
+      firstElement!.scrollIntoView({behavior: 'smooth'});
+      setScrollIntoView(false);
+    }
+  }, [visibleItems]);
+
+  useEffect(() => {
+    if (page > -1) {
+      // @ts-ignore
+      setVisibleItems(props.items.slice(elementsPerPage * page, elementsPerPage * page + elementsPerPage));
+    }
+  }, [page, props.items, elementsPerPage]);
+
+  useEffect(() => {
+    setPageAmount(paginated
+      ? Math.ceil(props.items.length / elementsPerPage)
+      : 1)
+  }, [props.items, elementsPerPage]);
+
+  const handlePageChange = (pageNumber: number) => {
+    setPage(pageNumber);
+    setScrollIntoView(true);
+  }
+
   return (
     <Paper elevation={2}>
       <Box p={2}>
@@ -268,12 +325,21 @@ const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
           />
         )}
 
+        {paginated && pageAmount > 1 && <PaginationBar currentPage={page} pageAmount={pageAmount} setPage={handlePageChange}/>}
+
         <Grid container={true} key={`array-item-list-${props.idSchema.$id}`}>
-          {props.items && props.items.map(p => DefaultArrayItem(
+          {paginated && visibleItems && visibleItems.map(p => DefaultArrayItem(
+            // @ts-ignore
             {...p,
-                size: props.items.length,
-                hasRemove: props.items.length > (props.schema.minItems ? props.schema.minItems : 0) && p.hasRemove,
-                extraOptions: (props.schema as any).extraListOptions}
+              size: props.items.length,
+              hasRemove: props.items.length > (props.schema.minItems ? props.schema.minItems : 0) && p.hasRemove,
+              extraOptions: (props.schema as any).extraListOptions}
+          ))}
+          {!paginated && props.items && props.items.map(p => DefaultArrayItem(
+            {...p,
+              size: props.items.length,
+              hasRemove: props.items.length > (props.schema.minItems ? props.schema.minItems : 0) && p.hasRemove,
+              extraOptions: (props.schema as any).extraListOptions}
           ))}
 
           {props.canAdd && (
@@ -282,7 +348,11 @@ const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
                 <Box mt={2}>
                   <AddButton
                     className="array-item-add"
-                    onClick={props.onAddClick}
+                    onClick={paginated && props.items.length > 0 ? () => {
+                      setScrollIntoView(true);
+                      props.items[0].onAddIndexClick((page+1)*elementsPerPage)()
+                      setPage(page + 1);
+                    } : props.onAddClick}
                     disabled={props.disabled || props.readonly}
                   />
                 </Box>
@@ -291,6 +361,11 @@ const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
           )}
         </Grid>
       </Box>
+      {paginated && pageAmount > 1 && <PaginationBar currentPage={page} pageAmount={pageAmount} setPage={handlePageChange}/>}
+      {paginated && <p style={{paddingLeft: 20, paddingBottom: 15}}>
+        {intl.formatMessage({defaultMessage: 'Elements per page: '})}
+        {[5, 10, 15].map(i => <Button size="small" style={{minWidth: 1, maxWidth: 30, borderRadius: 32, marginLeft: 5}} variant="outlined" disabled={i === elementsPerPage} onClick={() => setElementsPerPage(i)}>{i}</Button>)}
+      </p>}
     </Paper>
   );
 };
