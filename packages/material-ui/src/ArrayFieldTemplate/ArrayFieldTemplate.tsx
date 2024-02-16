@@ -349,9 +349,11 @@ const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
                   <AddButton
                     className="array-item-add"
                     onClick={paginated && props.items.length > 0 ? () => {
-                      setScrollIntoView(true);
                       props.items[0].onAddIndexClick((page+1)*elementsPerPage)()
-                      setPage(page + 1);
+                      if (page + 1 < pageAmount || props.items.length - (page+1)*elementsPerPage >= 0 ) {
+                        setScrollIntoView(true);
+                        setPage(page + 1);
+                      }
                     } : props.onAddClick}
                     disabled={props.disabled || props.readonly}
                   />
