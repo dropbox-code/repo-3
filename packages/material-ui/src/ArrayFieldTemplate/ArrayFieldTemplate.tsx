@@ -286,7 +286,9 @@ const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
   }, [visibleItems]);
 
   useEffect(() => {
-    if (page > -1) {
+    if (page > props.items.length/elementsPerPage && page > -1) {
+      setPage(Math.floor(props.items.length/elementsPerPage));
+    } else if (page > -1) {
       // @ts-ignore
       setVisibleItems(props.items.slice(elementsPerPage * page, elementsPerPage * page + elementsPerPage));
     }
