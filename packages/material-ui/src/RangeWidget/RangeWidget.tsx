@@ -5,6 +5,7 @@ import { makeStyles } from '@material-ui/core/styles';
 
 import { utils } from "@visma/rjsf-core";
 import { WidgetProps } from "@visma/rjsf-core";
+import Typography from "@material-ui/core/Typography";
 
 const { rangeSpec } = utils;
 const useStyles = (props: { markWidth: number; }) => makeStyles({
@@ -147,6 +148,14 @@ const RangeWidget = ({
   const classes = useStyles({markWidth: markWidth > 15 ? markWidth : 15})();
   return (
     <div className={classes.sliderRoot}>
+      {options.description && options.description !== "" &&
+          <Typography
+              id={utils.descriptionId(id)}
+              variant="caption"
+              color="textSecondary">
+            {options.description}
+          </Typography>
+      }
       <Slider
         className={classes.slider}
         aria-label={utils.generateAriaLabel(label, options, required)}
