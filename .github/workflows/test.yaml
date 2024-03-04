@@ -1,0 +1,29 @@
+---
+name: test
+
+on:
+  pull_request:
+
+env:
+  LOG_LEVEL: debug
+
+jobs:
+  preset:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    strategy:
+      matrix:
+        file:
+          - actions
+          - default
+          - typescript
+          - versions
+    env:
+      RENOVATE_CONFIG_FILE: ${{ matrix.file }}.json
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: testing ${{ matrix.file }}
+        run: npx -p renovate renovate-config-validator

@@ -1,0 +1,21 @@
+---
+  name: Create Release
+  on:
+    push:
+      branches:
+        - main
+
+  permissions:
+    actions: write
+    contents: write
+    pull-requests: write
+
+  jobs:
+    build:
+      runs-on: ubuntu-latest
+      steps:
+        - id: release
+          name: Run release please
+          uses: google-github-actions/release-please-action@v3
+          with:
+            command: manifest

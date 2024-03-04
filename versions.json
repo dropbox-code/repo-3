@@ -1,0 +1,111 @@
+{
+    "description": "Special rules covering major version updates.",
+    "packageRules": [
+        {
+            "description": "Major version updates for dependencies with no depType",
+            "matchPackagePatterns": [
+                "*"
+            ],
+            "matchUpdateTypes": [
+                "major"
+            ],
+            "labels": [
+                "major-version",
+                "dependencies",
+                "renovate"
+            ],
+            "semanticCommitType": "feat"
+        },
+        {
+            "description": "Minor version dependency updates with no depType",
+            "matchPackagePatterns": [
+                "*"
+            ],
+            "matchUpdateTypes": [
+                "minor"
+            ],
+            "labels": [
+                "minor-version",
+                "dependencies",
+                "renovate"
+            ],
+            "semanticCommitType": "feat"
+        },
+        {
+            "description": "Patch version dependency updates with no depType",
+            "matchPackagePatterns": [
+                "*"
+            ],
+            "matchUpdateTypes": [
+                "patch"
+            ],
+            "labels": [
+                "minor-version",
+                "dependencies",
+                "renovate"
+            ],
+            "semanticCommitType": "fix"
+        },
+        {
+            "description": "Major or minor version dependency updates with depType",
+            "matchDepTypes": [
+                "module",
+                "provider",
+                "required_provider",
+                "required_version"
+            ],
+            "matchPackagePatterns": [
+                "*"
+            ],
+            "matchUpdateTypes": [
+                "major",
+                "minor"
+            ],
+            "labels": [
+                "minor-version",
+                "dependencies",
+                "renovate"
+            ],
+            "semanticCommitType": "feat"
+        },
+        {
+            "description": "Patch version dependency updates with depType",
+            "matchDepTypes": [
+                "dependencies",
+                "packages",
+                "provider",
+                "required_provider",
+                "required_version"
+            ],
+            "matchPackagePatterns": [
+                "*"
+            ],
+            "matchUpdateTypes": [
+                "patch"
+            ],
+            "labels": [
+                "patch-version",
+                "dependencies",
+                "renovate"
+            ],
+            "semanticCommitType": "fix"
+        },
+        {
+            "description": "Dev dependencies with depType",
+            "matchDepTypes": [
+                "devDependencies",
+                "dev-packages",
+                "peerDependencies"
+            ],
+            "matchPackagePatterns": [
+                "*"
+            ],
+            "labels": [
+                "patch-version",
+                "dependencies",
+                "renovate"
+            ],
+            "semanticCommitType": "chore"
+        }
+    ]
+}

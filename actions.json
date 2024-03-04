@@ -1,0 +1,17 @@
+{
+    "description": "Rules governing github actions.",
+    "packageRules": [
+        {
+            "matchManagers": [
+                "github-actions"
+            ],
+            "matchDatasources": [
+                "github-tags"
+            ],
+            "registryUrls": [
+                "https://github.com/"
+            ],
+            "semanticCommitType": "chore"
+        }
+    ]
+}
