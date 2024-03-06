@@ -2,14 +2,13 @@
     "description": "Base Renovate configuration for Expedia Group projects",
     "extends": [
         "config:recommended",
-        ":dependencyDashboard",
         ":pinAllExceptPeerDependencies",
         "github>ExpediaGroup/renovate-config//versions",
-        "github>ExpediaGroup/renovate-config//actions"
+        "github>ExpediaGroup/renovate-config//actions",
+        "schedule:earlyMondays"
     ],
     "commitMessageExtra": "from v{{currentVersion}} to {{#if isPinDigest}}{{{newDigestShort}}}{{else}}{{#if isMajor}}{{prettyNewMajor}}{{else}}{{#if isSingleVersion}}{{prettyNewVersion}}{{else}}{{#if newValue}}{{{newValue}}}{{else}}{{{newDigestShort}}}{{/if}}{{/if}}{{/if}}{{/if}}",
     "commitMessageTopic": "{{#if depType}}{{depType}}{{else}}dependency{{/if}} {{depName}}",
-    "dependencyDashboard": true,
     "labels": [
         "dependencies",
         "renovate"
@@ -17,6 +16,5 @@
     "prBodyTemplate": "{{{header}}}{{{table}}}{{{notes}}}{{{changelogs}}}{{{configDescription}}}{{{controls}}}",
     "prConcurrentLimit": 5,
     "prHourlyLimit": 0,
-    "rebaseWhen": "never",
     "semanticCommits": "enabled"
 }
