@@ -1,4 +1,4 @@
-# Mobile Srevices end-of-support
+# Mobile Services end-of-support
 
 <InlineAlert variant="error" slots="text"/>
 
