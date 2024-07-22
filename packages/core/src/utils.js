@@ -1346,7 +1346,7 @@ export const getGlobalMessage = messageName => {
 export const generateAriaLabel = (label, options, required) => {
   let ariaLabel = label;
 
-  if (!ariaLabel) {
+  if (!ariaLabel && options.element) {
     const element = options.element;
     ariaLabel = element.useLabel
       ? element.label === "" || !element.label
