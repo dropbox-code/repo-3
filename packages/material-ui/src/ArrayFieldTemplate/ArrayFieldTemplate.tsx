@@ -15,6 +15,8 @@ import Typography from '@material-ui/core/Typography';
 import Divider from '@material-ui/core/Divider';
 import { JSONSchema7 } from 'json-schema';
 import Button from "@material-ui/core/Button";
+import Checkbox from "@material-ui/core/Checkbox";
+import FormControlLabel from "@material-ui/core/FormControlLabel";
 
 const {
   isMultiSelect,
@@ -266,8 +268,9 @@ const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
   const paginated = (props.schema.items as {pagination?: boolean})!.pagination !== undefined ? (props.schema.items as {pagination?: boolean})!.pagination : false;
   //const elementsPerPage = paginated ? (props.schema.items as {elementsPerPage: number})!.elementsPerPage : -1;
   const [visibleItems, setVisibleItems] = useState([]);
+  const [disablePagination, setDisablePagination] = useState(localStorage.getItem('formulaDisablePagination') === 'true');
   const [page, setPage] = useState(0);
-  const [elementsPerPage, setElementsPerPage] = useState(5);
+  const [elementsPerPage, setElementsPerPage] = useState(localStorage.getItem('formulaPaginationElements') ? Number(localStorage.getItem('formulaPaginationElements')) : 5);
   const [scrollIntoView, setScrollIntoView] = useState(false);
   const [pageAmount, setPageAmount] = useState(
     paginated
@@ -305,6 +308,16 @@ const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
     setScrollIntoView(true);
   }
 
+  const handleSetElementsPerPage = (amount: number) => {
+    localStorage.setItem('formulaPaginationElements', amount.toString());
+    setElementsPerPage(amount);
+  }
+
+  const handleDisablePagination = (event: React.ChangeEvent<HTMLInputElement>) => {
+    localStorage.setItem('formulaDisablePagination', event.target.checked ? "true" : "false");
+    setDisablePagination(event.target.checked);
+  }
+
   return (
     <Paper elevation={2}>
       <Box p={2}>
@@ -327,17 +340,17 @@ const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
           />
         )}
 
-        {paginated && pageAmount > 1 && <PaginationBar currentPage={page} pageAmount={pageAmount} setPage={handlePageChange}/>}
+        {paginated && !disablePagination && pageAmount > 1 && <PaginationBar currentPage={page} pageAmount={pageAmount} setPage={handlePageChange}/>}
 
         <Grid container={true} key={`array-item-list-${props.idSchema.$id}`}>
-          {paginated && visibleItems && visibleItems.map(p => DefaultArrayItem(
+          {paginated && !disablePagination && visibleItems && visibleItems.map(p => DefaultArrayItem(
             // @ts-ignore
             {...p,
               size: props.items.length,
               hasRemove: props.items.length > (props.schema.minItems ? props.schema.minItems : 0) && p.hasRemove,
               extraOptions: (props.schema as any).extraListOptions}
           ))}
-          {!paginated && props.items && props.items.map(p => DefaultArrayItem(
+          {!(paginated && !disablePagination) && props.items && props.items.map(p => DefaultArrayItem(
             {...p,
               size: props.items.length,
               hasRemove: props.items.length > (props.schema.minItems ? props.schema.minItems : 0) && p.hasRemove,
@@ -350,7 +363,7 @@ const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
                 <Box mt={2}>
                   <AddButton
                     className="array-item-add"
-                    onClick={paginated && props.items.length > 0 ? () => {
+                    onClick={paginated && !disablePagination && props.items.length > 0 ? () => {
                       props.items[0].onAddIndexClick((page+1)*elementsPerPage)()
                       if (page + 1 < pageAmount || props.items.length - (page+1)*elementsPerPage >= 0 ) {
                         setScrollIntoView(true);
@@ -365,11 +378,17 @@ const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
           )}
         </Grid>
       </Box>
-      {paginated && pageAmount > 1 && <PaginationBar currentPage={page} pageAmount={pageAmount} setPage={handlePageChange}/>}
-      {paginated && <p style={{paddingLeft: 20, paddingBottom: 15}}>
+      {paginated && !disablePagination && pageAmount > 1 && <PaginationBar currentPage={page} pageAmount={pageAmount} setPage={handlePageChange}/>}
+      {paginated && !disablePagination && <p style={{paddingLeft: 20}}>
         {intl.formatMessage({defaultMessage: 'Elements per page: '})}
-        {[5, 10, 15].map(i => <Button size="small" style={{minWidth: 1, maxWidth: 30, borderRadius: 32, marginLeft: 5}} variant="outlined" disabled={i === elementsPerPage} onClick={() => setElementsPerPage(i)}>{i}</Button>)}
+        {[5, 10, 15].map(i => <Button size="small" style={{minWidth: 1, maxWidth: 30, borderRadius: 32, marginLeft: 5}} variant="outlined" disabled={i === elementsPerPage} onClick={() => handleSetElementsPerPage(i)}>{i}</Button>)}
       </p>}
+      {paginated &&
+          <FormControlLabel
+              style={{paddingLeft: 20, paddingBottom: 15}}
+              control={<Checkbox value={disablePagination}
+              onChange={handleDisablePagination} />}
+              label={intl.formatMessage({defaultMessage: 'Ota sivutus pois päältä'})} />}
     </Paper>
   );
 };
