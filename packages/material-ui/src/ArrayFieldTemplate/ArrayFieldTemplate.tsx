@@ -388,7 +388,7 @@ const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
               style={{paddingLeft: 20, paddingBottom: 15}}
               control={<Checkbox value={disablePagination}
               onChange={handleDisablePagination} />}
-              label={intl.formatMessage({defaultMessage: 'Ota sivutus pois päältä'})} />}
+              label={intl.formatMessage({defaultMessage: 'Disable pagination'})} />}
     </Paper>
   );
 };
