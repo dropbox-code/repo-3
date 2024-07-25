@@ -20,7 +20,7 @@ const showTitle = (schema: any, uiSchema: any) => {
   else if (uiSchema['ui:widget'] === 'checkbox' || (schema.type === 'boolean' && uiSchema['ui:widget'] !== 'radio') || uiSchema['ui:options'].element.type === 'button') {
     return false;
   }
-  return schema.format === 'table' || !(schema.type === 'object' || (schema.type === 'string' && schema.title === undefined));
+  return schema.format === 'table' || schema.format === 'confirmField' || !(schema.type === 'object' || (schema.type === 'string' && schema.title === undefined));
 }
 
 const getLabel = (uiSchema: any, defaultLabel: string) => {
