@@ -265,18 +265,19 @@ const PaginationBar = (props: {currentPage: number, pageAmount: number, setPage:
 
 const DefaultNormalArrayFieldTemplate = (props: ArrayFieldTemplateProps) => {
   const intl = useIntl();
-  const paginated = (props.schema.items as {pagination?: boolean})!.pagination !== undefined ? (props.schema.items as {pagination?: boolean})!.pagination : false;
-  //const elementsPerPage = paginated ? (props.schema.items as {elementsPerPage: number})!.elementsPerPage : -1;
+  const paginated = (props.schema.items as {pagination?: boolean})!.pagination !== undefined
+    ? (props.schema.items as {pagination?: boolean})!.pagination
+    : false;
   const [visibleItems, setVisibleItems] = useState([]);
   const [disablePagination, setDisablePagination] = useState(localStorage.getItem('formulaDisablePagination') === 'true');
   const [page, setPage] = useState(0);
   const [elementsPerPage, setElementsPerPage] = useState(localStorage.getItem('formulaPaginationElements') ? Number(localStorage.getItem('formulaPaginationElements')) : 5);
-  const [scrollIntoView, setScrollIntoView] = useState(false);
   const [pageAmount, setPageAmount] = useState(
     paginated
       ? Math.ceil(props.items.length / elementsPerPage)
       : 1
   );
+  const [scrollIntoView, setScrollIntoView] = useState(false);
 
   useEffect(() => {
     if (visibleItems && visibleItems.length > 0 && scrollIntoView) {
