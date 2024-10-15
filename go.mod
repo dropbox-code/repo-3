@@ -80,7 +80,7 @@ require (
 	golang.org/x/tools v0.1.6 // indirect
 	google.golang.org/api v0.39.0
 	google.golang.org/grpc v1.39.0
-	google.golang.org/protobuf v1.27.1
+	google.golang.org/protobuf v1.35.1
 	gopkg.in/alexcesaro/statsd.v2 v2.0.0
 	gopkg.in/ini.v1 v1.52.0 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0
