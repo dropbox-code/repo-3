@@ -1839,7 +1839,7 @@ jobs:
     - continue-on-error: true
       id: changes
       name: Check PR for changes to Wasm
-      uses: dorny/paths-filter@v2
+      uses: dorny/paths-filter@v3
       with:
         filters: "wasm:\n  - Makefile\n  - 'wasm/**'\n  - 'ast/**'\n  - 'internal/compiler/**'\n\
           \  - 'internal/planner/**'\n  - 'internal/wasm/**'\n  - 'test/wasm/**'\n\
