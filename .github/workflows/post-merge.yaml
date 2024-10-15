@@ -512,7 +512,7 @@ jobs:
       timeout-minutes: 60
     - continue-on-error: true
       name: Download release binaries
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: binaries
         path: _release
