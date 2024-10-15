@@ -248,7 +248,7 @@ jobs:
         sudo sh -c ''echo 1 > /proc/sys/net/ipv4/ip_forward'''
     - continue-on-error: true
       name: Check out code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - continue-on-error: true
       name: Unit Test Golang
       run: make ci-go-test-coverage
@@ -505,7 +505,7 @@ jobs:
         sudo sh -c ''echo 1 > /proc/sys/net/ipv4/ip_forward'''
     - continue-on-error: true
       name: Check out code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - continue-on-error: true
       name: Test
       run: make ci-release-test
@@ -781,7 +781,7 @@ jobs:
         sudo sh -c ''echo 1 > /proc/sys/net/ipv4/ip_forward'''
     - continue-on-error: true
       name: Check out code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - continue-on-error: true
       env:
         DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
@@ -1039,7 +1039,7 @@ jobs:
         sudo sh -c ''echo 1 > /proc/sys/net/ipv4/ip_forward'''
     - continue-on-error: true
       name: Check out code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         token: ${{ secrets.GH_PUSH_TOKEN }}
     - continue-on-error: true
@@ -1313,7 +1313,7 @@ jobs:
         sudo sh -c ''echo 1 > /proc/sys/net/ipv4/ip_forward'''
     - continue-on-error: true
       name: Check out code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - continue-on-error: true
       env:
         TELEMETRY_URL: ${{ secrets.TELEMETRY_URL }}

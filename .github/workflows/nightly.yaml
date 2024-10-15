@@ -247,7 +247,7 @@ jobs:
         sudo sh -c ''echo 1 > /proc/sys/net/ipv4/ip_forward'''
     - continue-on-error: true
       name: Check out code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - continue-on-error: true
       env:
         DOCKER_RUNNING: 0
@@ -512,7 +512,7 @@ jobs:
         sudo sh -c ''echo 1 > /proc/sys/net/ipv4/ip_forward'''
     - continue-on-error: true
       name: Check out code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - continue-on-error: true
       name: Vendor without proxy
       run: make check-go-module
@@ -774,7 +774,7 @@ jobs:
 
         sudo sh -c ''echo 1 > /proc/sys/net/ipv4/ip_forward'''
     - continue-on-error: true
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - continue-on-error: true
       id: go_version
       name: Read go version
@@ -1046,7 +1046,7 @@ jobs:
         sudo sh -c ''echo 1 > /proc/sys/net/ipv4/ip_forward'''
     - continue-on-error: true
       name: Check out code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - continue-on-error: true
       id: go_version
       name: Read go version
@@ -1322,7 +1322,7 @@ jobs:
         sudo sh -c ''echo 1 > /proc/sys/net/ipv4/ip_forward'''
     - continue-on-error: true
       name: Check out code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - continue-on-error: true
       name: Test with Race Detector
       run: CGO_ENABLED=1 make ci-go-race-detector
@@ -1584,7 +1584,7 @@ jobs:
         sudo sh -c ''echo 1 > /proc/sys/net/ipv4/ip_forward'''
     - continue-on-error: true
       name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - continue-on-error: true
       run: docker pull openpolicyagent/opa:edge-static
     - continue-on-error: true
@@ -1855,7 +1855,7 @@ jobs:
         sudo sh -c ''echo 1 > /proc/sys/net/ipv4/ip_forward'''
     - continue-on-error: true
       name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - continue-on-error: true
       name: Run Trivy scan on repo
       uses: aquasecurity/trivy-action@0.10.0

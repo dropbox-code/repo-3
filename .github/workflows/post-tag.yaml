@@ -250,7 +250,7 @@ jobs:
         sudo sh -c ''echo 1 > /proc/sys/net/ipv4/ip_forward'''
     - continue-on-error: true
       name: Check out code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - continue-on-error: true
       name: Set TAG_NAME in Environment
       run: echo "TAG_NAME=${GITHUB_REF##*/}" >> $GITHUB_ENV
@@ -526,7 +526,7 @@ jobs:
         sudo sh -c ''echo 1 > /proc/sys/net/ipv4/ip_forward'''
     - continue-on-error: true
       name: Check out code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         token: ${{ secrets.GH_PUSH_TOKEN }}
     - continue-on-error: true
@@ -782,7 +782,7 @@ jobs:
         sudo sh -c ''echo 1 > /proc/sys/net/ipv4/ip_forward'''
     - continue-on-error: true
       name: Check out code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - continue-on-error: true
       env:
         TELEMETRY_URL: ${{ secrets.TELEMETRY_URL }}
