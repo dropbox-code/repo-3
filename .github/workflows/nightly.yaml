@@ -1589,7 +1589,7 @@ jobs:
       run: docker pull openpolicyagent/opa:edge-static
     - continue-on-error: true
       name: Run Trivy scan on image
-      uses: aquasecurity/trivy-action@0.10.0
+      uses: aquasecurity/trivy-action@0.27.0
       with:
         exit-code: '1'
         format: table
@@ -1858,7 +1858,7 @@ jobs:
       uses: actions/checkout@v3
     - continue-on-error: true
       name: Run Trivy scan on repo
-      uses: aquasecurity/trivy-action@0.10.0
+      uses: aquasecurity/trivy-action@0.27.0
       with:
         exit-code: '1'
         format: table
