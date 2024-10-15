@@ -66,8 +66,8 @@ require (
 	github.com/spf13/viper v1.6.2
 	github.com/stretchr/testify v1.7.0
 	github.com/thoas/go-funk v0.5.0
-	github.com/tidwall/gjson v1.10.2
-	github.com/tidwall/sjson v1.0.4
+	github.com/tidwall/gjson v1.14.2
+	github.com/tidwall/sjson v1.2.5
 	github.com/xdg/scram v1.0.3
 	github.com/xitongsys/parquet-go v1.6.1-0.20210531003158-8ed615220b7d
 	github.com/xtgo/uuid v0.0.0-20140804021211-a0b114877d4c // indirect
