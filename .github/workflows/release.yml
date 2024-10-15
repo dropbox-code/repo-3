@@ -285,7 +285,7 @@ jobs:
         hackageToken: ${{ secrets[steps.hackage_token_secret.outputs.name] }}
         packagesPath: ./sdist
     - continue-on-error: true
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         body_path: /tmp/changelog-body
         draft: true
