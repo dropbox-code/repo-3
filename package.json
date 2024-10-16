@@ -47,7 +47,7 @@
   },
   "devDependencies": {
     "core-js": "^3.6.5",
-    "is-svg": "^4.2.2",
+    "is-svg": "^5.1.0",
     "node-forge": "^1.2.1",
     "set-value": "^4.0.0",
     "ssri": "^9.0.1",
