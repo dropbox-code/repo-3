@@ -284,7 +284,7 @@ jobs:
       uses: sigstore/cosign-installer@9614fae9e5c5eddabb09f90a270fcb487c9f7149
     - continue-on-error: true
       name: Install Oras
-      uses: oras-project/setup-oras@ee7dbe1144cb00080a89497f937dae78f85fce29
+      uses: oras-project/setup-oras@ca28077386065e263c03428f4ae0c09024817c93
     - continue-on-error: true
       env:
         COSIGN_EXPERIMENTAL: 1
