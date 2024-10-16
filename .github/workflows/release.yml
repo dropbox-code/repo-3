@@ -1376,7 +1376,7 @@ jobs:
       uses: actions/checkout@v4
     - continue-on-error: true
       name: Generate sbom for karmada file system
-      uses: aquasecurity/trivy-action@0.24.0
+      uses: aquasecurity/trivy-action@0.28.0
       with:
         format: spdx
         output: sbom-karmada.spdx
