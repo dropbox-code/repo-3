@@ -23,7 +23,7 @@
   "dependencies": {
     "@informalsystems/tendermint-vue-ui": "^0.37.0",
     "@vuepress/plugin-google-analytics": "1.8.2",
-    "algoliasearch": "^4.2.0",
+    "algoliasearch": "^5.8.1",
     "axios": "^0.27.2",
     "cheerio": "^1.0.0-rc.3",
     "clipboard-copy": "^4.0.1",
