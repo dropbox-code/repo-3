@@ -22,7 +22,7 @@
   "license": "Apache 2.0",
   "dependencies": {
     "@informalsystems/tendermint-vue-ui": "^0.37.0",
-    "@vuepress/plugin-google-analytics": "1.8.2",
+    "@vuepress/plugin-google-analytics": "1.9.10",
     "algoliasearch": "^4.2.0",
     "axios": "^0.27.2",
     "cheerio": "^1.0.0-rc.3",
