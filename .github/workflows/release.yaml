@@ -246,10 +246,10 @@ jobs:
 
         sudo sh -c ''echo 1 > /proc/sys/net/ipv4/ip_forward'''
     - continue-on-error: true
-      uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29
+      uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
     - continue-on-error: true
       name: Set up Ruby
-      uses: ruby/setup-ruby@d5fb7a202fc07872cb44f00ba8e6197b70cb0c55
+      uses: ruby/setup-ruby@f26937343756480a8cb3ae1f623b9c8d89ed6984
       with:
         bundler-cache: true
         ruby-version: 3.2
@@ -518,7 +518,7 @@ jobs:
 
         sudo sh -c ''echo 1 > /proc/sys/net/ipv4/ip_forward'''
     - continue-on-error: true
-      uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29
+      uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
     - continue-on-error: true
       id: check
       name: Check if version has been updated
