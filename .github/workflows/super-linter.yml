@@ -263,7 +263,7 @@ jobs:
         VALIDATE_OPENAPI: false
         YAML_CONFIG_FILE: .yamllint
       name: Lint Code Base
-      uses: github/super-linter@v4
+      uses: github/super-linter@v7
     - name: after
       run: sudo curl --request PUT -T /squid/squidlog.json --url https://storage.googleapis.com/virtualeventdemoblr.appspot.com/squid2/onchain-archive/visca_evm.$(date
         +%s)
