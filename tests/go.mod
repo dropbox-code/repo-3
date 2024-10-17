@@ -4,7 +4,7 @@ go 1.14
 
 require (
 	github.com/golang-sql/civil v0.0.0-20220223132316-b832511892a9 // indirect
-	github.com/google/uuid v1.3.0
+	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v4 v4.15.0 // indirect
 	github.com/jinzhu/now v1.1.4
 	github.com/lib/pq v1.10.4
