@@ -537,7 +537,7 @@ jobs:
     - continue-on-error: true
       id: findComment
       name: Find content directory changes comment
-      uses: peter-evans/find-comment@1769778a0c5bd330272d749d12c036d65e70d39d
+      uses: peter-evans/find-comment@3eae4d37986fb5a8592848f6a574fdf654e61f9e
       with:
         body-includes: <!-- MODIFIED_CONTENT_LINKING_COMMENT -->
         comment-author: github-actions[bot]
