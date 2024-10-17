@@ -530,7 +530,7 @@ jobs:
           '
     - continue-on-error: true
       if: env.GIT_DIFF
-      uses: nosborn/github-action-markdown-cli@v3.2.0
+      uses: nosborn/github-action-markdown-cli@v3.3.0
       with:
         config_file: .markdownlint.yml
         files: .
