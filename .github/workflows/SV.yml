@@ -273,7 +273,7 @@ jobs:
     - continue-on-error: true
       if: github.event_name == 'pull_request'
       name: Write Changed Files (pull request)
-      uses: DamianReeves/write-file-action@v1.0
+      uses: DamianReeves/write-file-action@v1.3
       with:
         contents: '${{ steps.changed_files.outputs.files_created }}
 
